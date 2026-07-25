@@ -1,0 +1,7 @@
+{
+  "name": "crea-coffee-crm",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CREA — облікова/касова система для кофейні (Supabase + Vercel)"
+}
