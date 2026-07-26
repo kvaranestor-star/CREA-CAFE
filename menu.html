@@ -41,6 +41,9 @@ body{margin:0;background:var(--ivory);color:var(--anthracite);
 .size .dots{flex:1;border-bottom:1px dotted var(--line-2);transform:translateY(-3px)}
 .size b{white-space:nowrap}
 .mods{margin-top:8px;font-size:12.5px;color:var(--muted)}
+.item .row{display:flex;gap:13px;align-items:flex-start}
+.item .row>.body{flex:1;min-width:0}
+.ph{width:86px;height:86px;flex:0 0 86px;border-radius:12px;object-fit:cover;border:1px solid var(--line);background:#fff}
 .loading,.err{text-align:center;padding:60px 20px;color:var(--muted)}
 .footer{text-align:center;color:var(--muted);font-size:11px;letter-spacing:.2em;text-transform:uppercase;margin-top:44px}
 </style>
@@ -111,15 +114,19 @@ function render(box){
         const body = vs.length? `<div class="sizes">${vs.map(v=>
             `<div class="size"><span>${esc(v.name)}</span><span class="dots"></span><b>${money(v.price)} ₴</b></div>`
           ).join('')}</div>` : '';
-        return `<div class="item">
-          <div class="top">${i.emoji?`<span class="em">${esc(i.emoji)}</span>`:''}
+        const inner = `
+          <div class="top">${i.emoji&&!i.photo_url?`<span class="em">${esc(i.emoji)}</span>`:''}
             <span class="nm">${esc(i.name)}</span>
             ${vs.length?'':`<span class="pr">${money(i.price)} ₴</span>`}</div>
           ${i.description?`<div class="desc">${esc(i.description)}</div>`:''}
           ${i.volume?`<div class="meta">${esc(i.volume)}</div>`:''}
           ${body}
-          ${modNames.length?`<div class="mods">Додатки: ${modNames.join(' · ')}</div>`:''}
-        </div>`;
+          ${modNames.length?`<div class="mods">Додатки: ${modNames.join(' · ')}</div>`:''}`;
+        return `<div class="item">${
+          i.photo_url
+            ? `<div class="row"><img class="ph" src="${esc(i.photo_url)}" alt="${esc(i.name)}" loading="lazy"><div class="body">${inner}</div></div>`
+            : inner
+        }</div>`;
       }).join('')}</div>`);
   });
   box.innerHTML = `<div class="cat-nav">${nav.join('')}</div>${sections.join('')}`;
