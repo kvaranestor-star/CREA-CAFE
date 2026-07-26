@@ -283,8 +283,8 @@ body.kiosk #kiosk-tools{display:flex}
     <button class="burger" id="burger">☰</button>
     <div class="logo">CR<b>E</b>A</div>
     <div id="kiosk-tools">
-      <button class="btn sm" onclick="go('pos')">🧾 Каса</button>
-      <button class="btn sm ghost" onclick="go('cash')">Каса ±</button>
+      <button class="btn sm" onclick="go('pos')">🛒 Магазин</button>
+      <button class="btn sm ghost" onclick="go('cash')">💵 Каса</button>
     </div>
     <div class="spacer"></div>
     <div id="shift-pill" class="pill">Зміна…</div>
@@ -293,8 +293,8 @@ body.kiosk #kiosk-tools{display:flex}
   <div class="shell">
     <aside class="sidebar" id="sidebar">
       <div class="nav-group">Робота</div>
-      <div class="nav-item" data-page="pos"><span class="ic">🧾</span> Каса / Продаж</div>
-      <div class="nav-item" data-page="cash"><span class="ic">💵</span> Внесення / Винесення</div>
+      <div class="nav-item" data-page="pos"><span class="ic">🛒</span> Магазин</div>
+      <div class="nav-item" data-page="cash"><span class="ic">💵</span> Каса</div>
       <div class="nav-group">Меню</div>
       <div class="nav-item" data-page="menu"><span class="ic">☕</span> Меню</div>
       <div class="nav-item" data-page="recipes"><span class="ic">📋</span> Техкарти</div>
@@ -485,7 +485,7 @@ function logout(){
   $('#lg-pin').value=''; $('#lg-err').textContent='';
 }
 function go(page){
-  if(page==='shift') page='pos';   // зміна тепер живе на сторінці каси
+  if(page==='shift') page='cash';   // зміна живе у пункті «Каса»
   if(isBarista() && !BARISTA_PAGES.includes(page)) page='pos';  // жорстке обмеження ролі
   State.page = page;
   $$('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.page===page));
@@ -560,32 +560,21 @@ PAGES.pos = function(){
       <div class="pr">${vs.length?'від ':''}${money(pr)} ₴</div></div></button>`;
   }).join('') : `<div class="empty" style="grid-column:1/-1"><div class="em">☕</div><div>Меню порожнє. Додай позиції у розділі «Меню».</div></div>`;
 
-  if(!State.posTab) State.posTab = State.shift ? 'sale' : 'shift';
   $('#view').innerHTML = `
-  <div class="page-head"><h1>Каса</h1><div class="line"></div>
+  <div class="page-head"><h1>Магазин</h1><div class="line"></div>
     <span class="muted" style="font-size:12.5px">${State.shift?('зміна з '+new Date(State.shift.opened_at).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})):'зміна закрита'}</span></div>
-  <div class="cats" style="margin-bottom:16px">
-    <button class="chip ${State.posTab==='sale'?'active':''}" onclick="posTab('sale')">🧾 Продаж</button>
-    <button class="chip ${State.posTab==='shift'?'active':''}" onclick="posTab('shift')">${State.shift?'🟢':'🔴'} Зміна</button>
-  </div>
-  <div id="pos-body"></div>`;
-  if(State.posTab==='sale') renderSaleTab(catChips, tiles); else renderShiftTab();
-};
-function posTab(t){ State.posTab=t; PAGES.pos(); }
-function renderSaleTab(catChips, tiles){
-  $('#pos-body').innerHTML = `
-   ${State.shift?'':`<div class="card" style="margin-bottom:14px;padding:11px 16px;border-color:#b8863b55;background:#fff7e8;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between">
+  ${State.shift?'':`<div class="card" style="margin-bottom:14px;padding:11px 16px;border-color:#b8863b55;background:#fff7e8;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between">
       <span>⚠️ Зміна закрита — продаж заблоковано.</span>
-      <button class="btn sm" onclick="posTab('shift')">🔓 Відкрити зміну</button></div>`}
-   <div class="pos">
-     <div>
-       <div class="cats">${catChips}</div>
-       <div class="menu-grid">${tiles}</div>
-     </div>
-     <div class="card cart" id="cart"></div>
-   </div>`;
+      <button class="btn sm" onclick="go('cash')">🔓 Відкрити зміну в Касі</button></div>`}
+  <div class="pos">
+    <div>
+      <div class="cats">${catChips}</div>
+      <div class="menu-grid">${tiles}</div>
+    </div>
+    <div class="card cart" id="cart"></div>
+  </div>`;
   renderCart();
-}
+};
 function posSetCat(c){ State.posCat=c; PAGES.pos(); }
 function posPick(itemId){
   const it=item(itemId); if(!it) return;
@@ -761,23 +750,23 @@ async function addCustomerFromPOS(){
   }catch(e){ reportErr(e,'Клієнт'); }
 }
 
-/* ============================ ВКЛАДКА «ЗМІНА» (у пункті Каса) ============================ */
-async function renderShiftTab(){
-  const box=$('#pos-body'); if(!box) return;
+/* ============================ БЛОК «ЗМІНА» (на сторінці Каса) ============================ */
+async function renderShiftBlock(){
+  const box=$('#shift-block'); if(!box) return;
   if(!State.shift){
-    box.innerHTML = `<div style="display:flex;justify-content:center;padding:26px 0">
-      <div class="card" style="max-width:440px;width:100%;text-align:center;padding:34px 28px">
-        <div style="font-size:44px">🔓</div>
-        <h3 style="margin:12px 0 6px;font-size:18px">Відкрити зміну</h3>
-        <div class="muted" style="font-size:13px;margin-bottom:20px">Вкажи готівку в касі на початок дня.<br>Продаж стане доступним після відкриття.</div>
-        <label class="fld" style="text-align:left"><span>Готівка на початок, ₴</span>
-          <input id="sh-start" class="inp" type="number" step="0.01" value="0"></label>
-        <button class="btn block" onclick="openShift()">Відкрити зміну</button>
-      </div></div>`;
+    box.innerHTML = `<div class="card" style="max-width:520px">
+        <h3 style="margin:0 0 6px;font-size:17px">🔓 Відкрити зміну</h3>
+        <div class="muted" style="font-size:13px;margin-bottom:14px">Вкажи готівку в касі на початок дня. Продаж у Магазині стане доступним після відкриття.</div>
+        <div class="row" style="align-items:flex-end;gap:10px">
+          <label class="fld" style="margin-bottom:0"><span>Готівка на початок, ₴</span>
+            <input id="sh-start" class="inp" type="number" step="0.01" value="0"></label>
+          <button class="btn co-btn" onclick="openShift()">Відкрити зміну</button>
+        </div>
+      </div>`;
     return;
   }
   const s=State.shift;
-  box.innerHTML='<div class="card" style="max-width:440px;margin:0 auto"><div class="muted">Рахую зведення зміни…</div></div>';
+  box.innerHTML='<div class="card" style="max-width:440px"><div class="muted">Рахую зведення зміни…</div></div>';
   try{
     const [sales, ops] = await Promise.all([
       SB.get(`sales?select=*&shift_id=eq.${s.id}`),
@@ -838,7 +827,6 @@ async function openShift(){
         toast('Зміну ПРРО відкрито','ok');
       }catch(ce){ reportErr(ce,'Checkbox зміна'); toast('Локальну зміну відкрито, ПРРО — ні','err'); }
     }
-    State.posTab='sale';
     refreshTopbar(); toast('Зміну відкрито','ok'); go('pos');
   }catch(e){ reportErr(e,'Відкриття зміни'); }
 }
@@ -853,14 +841,16 @@ async function closeShift(expected){
     }
     const r=await SB.patch(`shifts?id=eq.${State.shift.id}`,{status:'closed', closed_at:new Date().toISOString(), closed_by:State.user.id, cash_end:end});
     if(sbErr(r)) throw r;
-    State.shift=null; State.posTab='shift'; closeModal(); refreshTopbar(); toast('Зміну закрито','ok'); go('reports');
+    State.shift=null; closeModal(); refreshTopbar(); toast('Зміну закрито','ok'); go(isBarista()?'cash':'reports');
   }catch(e){ reportErr(e,'Закриття зміни'); }
 }
 
 /* ============================ PAGE: ВНЕСЕННЯ/ВИНЕСЕННЯ ============================ */
 PAGES.cash = function(){
-  $('#view').innerHTML = `<div class="page-head"><h1>Внесення / Винесення</h1><div class="line"></div></div>
-   ${State.shift?'':'<div class="card" style="margin-bottom:14px;border-color:#b8863b55;background:#fff7e8;padding:12px 16px">⚠️ Зміна закрита — операції проводяться поза зміною.</div>'}
+  $('#view').innerHTML = `<div class="page-head"><h1>Каса</h1><div class="line"></div>
+    <span class="muted" style="font-size:12.5px">${State.shift?('зміна з '+new Date(State.shift.opened_at).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})):'зміна закрита'}</span></div>
+   <div id="shift-block" style="margin-bottom:20px"></div>
+   <div style="font-family:'Benzin','Montserrat';font-weight:800;text-transform:uppercase;letter-spacing:.05em;font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:12px">Внесення / Винесення<span style="flex:1;height:1px;background:var(--line)"></span></div>
    <div class="card" style="margin-bottom:16px">
      <div class="cats" style="margin-bottom:12px">
        <button type="button" id="co-tab-in"  class="chip active" onclick="cashTab('in')">➕ Внесення</button>
@@ -874,6 +864,7 @@ PAGES.cash = function(){
      </div>
    </div>
    <div id="cash-list"></div>`;
+  renderShiftBlock();
   cashTab('in');
   renderCashList();
 };
