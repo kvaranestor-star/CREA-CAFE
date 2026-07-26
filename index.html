@@ -205,6 +205,32 @@ select.inp{appearance:none;-webkit-appearance:none;
 .empty .em{font-size:34px;opacity:.5}
 
 .hidden{display:none!important}
+
+/* ---------- KIOSK / РЕЖИМ БАРИСТИ (тільки продаж, великі кнопки) ---------- */
+body.kiosk .sidebar{display:none}
+body.kiosk .burger{display:none}
+body.kiosk .main{padding:18px 22px 40px}
+body.kiosk .page-head{display:none}
+body.kiosk .pos{grid-template-columns:1fr 430px}
+body.kiosk .cats{gap:10px;margin-bottom:16px}
+body.kiosk .chip{height:50px;padding:0 22px;font-size:15.5px;border-radius:13px}
+body.kiosk .menu-grid{grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:14px}
+body.kiosk .mtile{min-height:140px;padding:16px 15px;border-radius:15px}
+body.kiosk .mtile .em{font-size:36px}
+body.kiosk .mtile .nm{font-size:16px}
+body.kiosk .mtile .pr{font-size:18px}
+body.kiosk .cart{top:74px}
+body.kiosk .cart h3{font-size:19px}
+body.kiosk .cline .cl-nm{font-size:15px}
+body.kiosk .qtybox button{width:42px;height:42px;font-size:21px}
+body.kiosk .qtybox span{min-width:38px;font-size:16px}
+body.kiosk .pay-btns{gap:10px;margin-top:10px}
+body.kiosk .pay-btns .btn{height:64px;font-size:17px;border-radius:14px}
+body.kiosk .mtile:active{transform:scale(.97)}
+#kiosk-tools{display:none;gap:8px}
+body.kiosk #kiosk-tools{display:flex}
+@media(max-width:960px){ body.kiosk .pos{grid-template-columns:1fr} }
+@media(max-width:820px){ body.kiosk .main{padding:14px} }
 .toast-wrap{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:500;display:flex;
   flex-direction:column;gap:8px;align-items:center}
 .toast{background:var(--anthracite);color:var(--ivory);padding:11px 18px;border-radius:12px;font-weight:600;
@@ -255,9 +281,14 @@ select.inp{appearance:none;-webkit-appearance:none;
   <div class="topbar">
     <button class="burger" id="burger">☰</button>
     <div class="logo">CR<b>E</b>A</div>
+    <div id="kiosk-tools">
+      <button class="btn sm" onclick="go('pos')">🧾 Каса</button>
+      <button class="btn sm ghost" onclick="go('shift')">Зміна</button>
+      <button class="btn sm ghost" onclick="go('cash')">Каса ±</button>
+    </div>
     <div class="spacer"></div>
     <div id="shift-pill" class="pill">Зміна…</div>
-    <div id="user-pill" class="pill"></div>
+    <div id="user-pill" class="pill" onclick="logout()" title="Вийти" style="cursor:pointer"></div>
   </div>
   <div class="shell">
     <aside class="sidebar" id="sidebar">
@@ -298,8 +329,8 @@ select.inp{appearance:none;-webkit-appearance:none;
    ⚠️ ВСТАВ свої ключі Supabase нижче ↓↓↓  (Settings → API у Supabase)
 ===================================================================== */
 const CONFIG = {
-  SUPABASE_URL:      'https://podbkulmoqlmpenymnms.supabase.co',   // <-- ВСТАВ
-  SUPABASE_ANON_KEY: 'sb_publishable_HXD6eqN5g3j6ExUD-jUYgg_t1xnbZoh',                      // <-- ВСТАВ
+  SUPABASE_URL:      'https://YOUR-PROJECT.supabase.co',   // <-- ВСТАВ
+  SUPABASE_ANON_KEY: 'YOUR-ANON-KEY',                      // <-- ВСТАВ
   MONOBANK_QR:       true,   // показувати кнопку QR-оплати (потрібна api/monobank.js + токен)
 };
 
@@ -369,6 +400,7 @@ const State = {
   modifiers:[], itemMods:[], recipes:[], suppliers:[], customers:[],
   shift:null,            // поточна відкрита зміна
   cart:[],               // POS корзина
+  checkbox:{enabled:false}, // фіскалізація ПРРО
   page:'pos', posCat:'all', posCustomer:null,
 };
 function withBranch(obj){ return Object.assign({branch_id:State.branchId}, obj); }
@@ -400,8 +432,37 @@ async function loadAll(){
   State.variants=arr(vars); State.modifiers=arr(mods); State.itemMods=arr(imods);
   State.recipes=arr(recs); State.suppliers=arr(sups); State.customers=arr(custs); State.users=arr(users);
   await loadShift();
+  await loadSettings();
 }
 function arr(x){ return Array.isArray(x)?x:[]; }
+async function loadSettings(){
+  try{
+    const r = await SB.get(`app_settings?select=*&branch_id=eq.${State.branchId}&key=eq.checkbox&limit=1`);
+    const row = arr(r)[0];
+    State.checkbox = (row && row.value) ? row.value : {enabled:false};
+  }catch(e){ State.checkbox = {enabled:false}; }  // таблиці ще нема — не падаємо
+}
+function cbEnabled(){ return !!(State.checkbox && State.checkbox.enabled); }
+// які види оплати фіскалізувати. Якщо не задано — за замовч. усі три.
+function cbPay(){ const p=State.checkbox&&State.checkbox.pay; return p||{cash:true,card:true,qr:true}; }
+function cbAnyPay(){ const p=cbPay(); return !!(p.cash||p.card||p.qr); }
+function cbFiscalize(method){ return cbEnabled() && !!cbPay()[method]; }
+
+/* ---------------- Checkbox (ПРРО) client ---------------- */
+const Checkbox = {
+  cfg(){ const c=State.checkbox||{}; return {license_key:c.license_key,pin:c.pin,login:c.login,password:c.password,cashier_name:c.cashier_name}; },
+  async call(action, extra){
+    const res = await fetch('/api/checkbox', {method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(Object.assign({action, cfg:this.cfg()}, extra||{}))});
+    let d=null; const t=await res.text(); if(t){ try{d=JSON.parse(t);}catch(_){d={error:t};} }
+    if(!res.ok) throw new Error((d&&d.error)||('HTTP '+res.status));
+    return d||{};
+  },
+  test(){ return this.call('test'); },
+  openShift(){ return this.call('shift_open'); },
+  closeShift(){ return this.call('shift_close'); },
+  sell(goods, method){ return this.call('sell', {goods, method}); },
+};
 async function loadShift(){
   const r = await SB.get(`shifts?select=*&branch_id=eq.${State.branchId}&status=eq.open&order=opened_at.desc&limit=1`);
   State.shift = arr(r)[0] || null;
@@ -409,7 +470,22 @@ async function loadShift(){
 
 /* ============================ ROUTER ============================ */
 const PAGES = {}; // name -> render()
+const BARISTA_PAGES = ['pos','shift','cash'];   // баристі доступний тільки продаж + зміна/каса
+function isBarista(){ return State.user && State.user.role === 'barista'; }
+function applyRole(){
+  const b = isBarista();
+  document.body.classList.toggle('kiosk', !!b);
+}
+function logout(){
+  if(!confirm('Вийти з системи?')) return;
+  State.user=null; State.cart=[]; State.posCustomer=null;
+  document.body.classList.remove('kiosk');
+  $('#app').classList.remove('show');
+  $('#login').classList.add('show');
+  $('#lg-pin').value=''; $('#lg-err').textContent='';
+}
 function go(page){
+  if(isBarista() && !BARISTA_PAGES.includes(page)) page='pos';  // жорстке обмеження ролі
   State.page = page;
   $$('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.page===page));
   $('#sidebar').classList.remove('open'); $('#mask').classList.remove('show');
@@ -622,8 +698,23 @@ async function checkout(method){
       const nb=round2(num(c.bonus)+total*0.05);
       await SB.patch(`customers?id=eq.${c.id}`, {bonus:nb, stamps:(c.stamps||0)+1});
     }
-    if(method==='qr') toast('Згенеруй QR у терміналі / Monobank. Чек проведено.','ok');
-    else toast('Чек проведено ✓ '+money(total)+' ₴','ok');
+    // 6. ФІСКАЛІЗАЦІЯ Checkbox (ПРРО) — лише для обраних видів оплати
+    if(cbFiscalize(method)){
+      try{
+        toast('Фіскалізую чек…');
+        const goods = State.cart.map((l,i)=>({code:l.itemId.slice(0,8)||String(i+1), name:cartLineTitle(l), price:lineUnitPrice(l), qty:l.qty}));
+        const r = await Checkbox.sell(goods, method);
+        const rec = r.receipt||{};
+        await SB.patch(`sales?id=eq.${sale.id}`, {fiscal_code:rec.fiscal_code||null, fiscal_url:rec.fiscal_url||null, checkbox_receipt_id:rec.id||null});
+        if(rec.fiscal_code) toast('Фіскальний чек ✓ №'+rec.fiscal_code,'ok');
+        else toast('Чек надіслано у Checkbox (статус уточнюється)','ok');
+        if(rec.fiscal_url) window.__lastFiscalUrl = rec.fiscal_url;
+      }catch(fe){ reportErr(fe,'Checkbox'); toast('Чек збережено, але БЕЗ фіскалізації','err'); }
+    } else {
+      // цей вид оплати не фіскалізується (або ПРРО вимкнено)
+      if(method==='qr') toast('Згенеруй QR у терміналі / Monobank. Чек проведено.','ok');
+      else toast('Чек проведено ✓ '+money(total)+' ₴','ok');
+    }
     State.cart=[]; State.posCustomer=null;
     renderCart();
   }catch(e){ reportErr(e,'Проведення чека'); }
@@ -707,10 +798,24 @@ async function renderShiftBody(){
    </div>`;
 }
 async function openShift(){
+  // якщо ПРРО увімкнено, але не обрано жодного виду оплати для фіскалізації — не відкривати зміну
+  if(cbEnabled() && !cbAnyPay()){
+    toast('Оберіть хоча б один вид оплати для фіскалізації (Налаштування → Checkbox)','err');
+    alert('Фіскалізацію Checkbox увімкнено, але не обрано жодного виду оплати.\n\nЗайдіть у Налаштування → Checkbox і позначте, які оплати фіскалізувати (готівка / картка / QR), або вимкніть фіскалізацію. Без цього відкрити зміну не можна.');
+    if(State.user.role!=='barista') go('settings');
+    return;
+  }
   try{
     const r=await SB.post('shifts', withBranch({opened_by:State.user.id, cash_start:round2(num($('#sh-start').value)), status:'open'}));
     if(sbErr(r)) throw r;
-    State.shift=Array.isArray(r)?r[0]:r; refreshTopbar(); toast('Зміну відкрито','ok'); go('pos');
+    State.shift=Array.isArray(r)?r[0]:r;
+    if(cbEnabled()){
+      try{ toast('Відкриваю зміну ПРРО…'); const cr=await Checkbox.openShift();
+        const cid=cr.shift&&cr.shift.id; if(cid){ await SB.patch(`shifts?id=eq.${State.shift.id}`,{checkbox_shift_id:cid}); State.shift.checkbox_shift_id=cid; }
+        toast('Зміну ПРРО відкрито','ok');
+      }catch(ce){ reportErr(ce,'Checkbox зміна'); toast('Локальну зміну відкрито, ПРРО — ні','err'); }
+    }
+    refreshTopbar(); toast('Зміну відкрито','ok'); go('pos');
   }catch(e){ reportErr(e,'Відкриття зміни'); }
 }
 async function closeShift(expected){
@@ -718,6 +823,10 @@ async function closeShift(expected){
   const diff=round2(end-expected);
   if(!confirm(`Закрити зміну?\nРозрахункова готівка: ${money(expected)} ₴\nФакт: ${money(end)} ₴\nРозбіжність: ${money(diff)} ₴`)) return;
   try{
+    if(cbEnabled()){
+      try{ toast('Закриваю зміну ПРРО (Z-звіт)…'); await Checkbox.closeShift(); toast('Зміну ПРРО закрито (Z-звіт)','ok'); }
+      catch(ce){ reportErr(ce,'Checkbox зміна'); if(!confirm('ПРРО-зміну закрити не вдалося. Все одно закрити локальну?')) return; }
+    }
     const r=await SB.patch(`shifts?id=eq.${State.shift.id}`,{status:'closed', closed_at:new Date().toISOString(), closed_by:State.user.id, cash_end:end});
     if(sbErr(r)) throw r;
     State.shift=null; refreshTopbar(); toast('Зміну закрито','ok'); go('reports');
@@ -1246,11 +1355,69 @@ PAGES.settings = function(){
      <h3 style="margin-top:0">Філія</h3>
      <div class="muted" style="font-size:13px">Поточна: <b>${esc(State.branches.find(b=>b.id===State.branchId)?.name||'—')}</b> · режим однієї точки (перемикач філій прихований).</div>
    </div>
+   <div class="card" style="margin-bottom:14px">
+     <h3 style="margin-top:0">Checkbox — фіскалізація (ПРРО)</h3>
+     <label style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line-2);border-radius:12px;cursor:pointer;margin-bottom:14px;background:#fff">
+       <input type="checkbox" id="cb-enabled" ${cbEnabled()?'checked':''} style="width:20px;height:20px;accent-color:var(--anthracite)">
+       <div><b>Увімкнути фіскалізацію Checkbox</b>
+       <div class="muted" style="font-size:12.5px">Кожен чек проводиться через ПРРО; зміна відкривається/закривається з Z-звітом.</div></div>
+     </label>
+     <label class="fld"><span>Ключ ліцензії каси (X-License-Key)</span><input id="cb-lic" class="inp" value="${esc(State.checkbox.license_key||'')}" placeholder="напр. 8a94a3c4..."></label>
+     <div class="row">
+       <label class="fld"><span>PIN касира</span><input id="cb-pin" class="inp" value="${esc(State.checkbox.pin||'')}" placeholder="напр. 1234"></label>
+       <label class="fld"><span>Ім'я касира (для звіту)</span><input id="cb-cashier" class="inp" value="${esc(State.checkbox.cashier_name||'')}"></label>
+     </div>
+     <div class="fld"><span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:6px">Які види оплати фіскалізувати</span>
+       <div style="display:flex;gap:10px;flex-wrap:wrap">
+         <label class="chip" style="cursor:pointer;gap:8px"><input type="checkbox" id="cb-pay-cash" ${cbPay().cash?'checked':''} style="width:18px;height:18px;accent-color:var(--anthracite)"> 💵 Готівка</label>
+         <label class="chip" style="cursor:pointer;gap:8px"><input type="checkbox" id="cb-pay-card" ${cbPay().card?'checked':''} style="width:18px;height:18px;accent-color:var(--anthracite)"> 💳 Картка</label>
+         <label class="chip" style="cursor:pointer;gap:8px"><input type="checkbox" id="cb-pay-qr" ${cbPay().qr?'checked':''} style="width:18px;height:18px;accent-color:var(--anthracite)"> 📱 QR</label>
+       </div>
+       <div class="muted" style="font-size:12px;margin-top:6px">Якщо увімкнено фіскалізацію, але не обрано жодного — <b>зміну відкрити не можна</b>. Оплати без галочки проводяться без ПРРО.</div>
+     </div>
+     <div class="muted" style="font-size:12px;margin:2px 0 12px">Замість PIN можна логін/пароль касира. <b>Безпечніше</b> тримати секрети у Vercel ENV (<code>CHECKBOX_LICENSE_KEY</code>, <code>CHECKBOX_PIN</code>) і тут лише поставити галочку.</div>
+     <div class="row" style="max-width:420px">
+       <button class="btn ghost" onclick="testCheckbox()">Перевірити зв'язок</button>
+       <button class="btn" onclick="saveCheckbox()">Зберегти</button>
+     </div>
+     <div id="cb-status" class="muted" style="font-size:12.5px;margin-top:10px"></div>
+   </div>
    <div class="card">
      <h3 style="margin-top:0">QR / Monobank Acquiring</h3>
      <div class="muted" style="font-size:13px">Кнопка QR у касі ${CONFIG.MONOBANK_QR?'<b>увімкнена</b>':'вимкнена'}. Для реальної оплати додай <code>api/monobank.js</code> і токен мерчанта (див. інструкцію у файлі DEPLOY).</div>
    </div>`;
 };
+async function saveCheckbox(){
+  const cfg={
+    enabled: $('#cb-enabled').checked,
+    license_key: $('#cb-lic').value.trim(),
+    pin: $('#cb-pin').value.trim(),
+    cashier_name: $('#cb-cashier').value.trim(),
+    pay: { cash:$('#cb-pay-cash').checked, card:$('#cb-pay-card').checked, qr:$('#cb-pay-qr').checked },
+    login: State.checkbox.login||'', password: State.checkbox.password||'',
+  };
+  if(cfg.enabled && !(cfg.pay.cash||cfg.pay.card||cfg.pay.qr)){
+    if(!confirm('Не обрано жодного виду оплати для фіскалізації. Тоді зміну не можна буде відкрити, поки не обереш або не вимкнеш фіскалізацію. Зберегти все одно?')) return;
+  }
+  try{
+    // upsert у app_settings (key=checkbox, branch)
+    const existing = arr(await SB.get(`app_settings?select=id&branch_id=eq.${State.branchId}&key=eq.checkbox&limit=1`))[0];
+    if(existing){ const r=await SB.patch(`app_settings?id=eq.${existing.id}`,{value:cfg,updated_at:new Date().toISOString()}); if(sbErr(r))throw r; }
+    else { const r=await SB.post('app_settings', withBranch({key:'checkbox',value:cfg})); if(sbErr(r))throw r; }
+    State.checkbox=cfg;
+    toast('Налаштування Checkbox збережено','ok');
+    $('#cb-status').textContent = cfg.enabled? 'Фіскалізація увімкнена.' : 'Фіскалізація вимкнена.';
+  }catch(e){ reportErr(e,'Checkbox налаштування'); }
+}
+async function testCheckbox(){
+  $('#cb-status').textContent='Перевіряю…';
+  // тимчасово застосуємо введені значення для тесту
+  const tmp={license_key:$('#cb-lic').value.trim(),pin:$('#cb-pin').value.trim()};
+  const saved=State.checkbox; State.checkbox=Object.assign({},saved,tmp);
+  try{ const r=await Checkbox.test(); $('#cb-status').innerHTML='<span style="color:var(--ok)">✓ '+esc(r.message||'Зв\'язок OK')+'</span>'; }
+  catch(e){ $('#cb-status').innerHTML='<span style="color:var(--danger)">✕ '+esc(e.message||'Помилка')+'</span>'; }
+  finally{ State.checkbox=saved; }
+}
 function editUser(id){
   const u=id?State.users.find(x=>x.id===id):{name:'',login:'',role:'barista',pin:''};
   modal(id?'Співробітник':'Новий співробітник',
@@ -1326,6 +1493,7 @@ async function enterApp(){
   await loadAll();
   $('#login').classList.remove('show');
   $('#app').classList.add('show');
+  applyRole();
   refreshTopbar();
   go('pos');
 }
