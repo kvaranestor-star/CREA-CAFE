@@ -1341,20 +1341,41 @@ PAGES.recipes = function(){
       <span class="muted" style="font-size:12px">${g?esc(g.name)+' '+m.qty+UNITS[g.unit]:'без списання'}</span>
       <button class="btn sm ghost" onclick="editModifier('${m.id}')">✎</button></div>`;
   }).join('') : '<div class="muted">Модифікаторів ще немає.</div>';
-  // техкарти по позиціях (+ варіанти)
+  // техкарти по позиціях: позиція з розмірами = «папка», розкривається кліком
   const rows=[];
+  State.recOpen = State.recOpen || {};
   State.items.filter(i=>matchQ('recipes',i.name)).forEach(i=>{
     const vs=itemVariants(i.id);
-    if(vs.length){ vs.forEach(v=>{ const rc=recipeFor(i.id,v.id); rows.push(recRow(i,v,rc)); }); }
-    else { const rc=recipeFor(i.id,null); rows.push(recRow(i,null,rc)); }
+    if(!vs.length){ rows.push(recRow(i,null,false)); return; }
+    const open=!!State.recOpen[i.id];
+    const done=vs.filter(v=>State.recipes.some(r=>r.menu_item_id===i.id && r.variant_id===v.id)
+                          || State.recipes.some(r=>r.menu_item_id===i.id && !r.variant_id)).length;
+    const status = done===vs.length? '<span class="tag ok">всі рецепти задані</span>'
+                 : done? `<span class="tag warm">${done} з ${vs.length}</span>`
+                 : '<span class="tag danger">не задано</span>';
+    rows.push(`<tr style="cursor:pointer;user-select:none" onclick="toggleRecGroup('${i.id}')">
+      <td><b>${open?'▾':'▸'} ${esc(i.name)}</b></td>
+      <td>${vs.length} розм.</td>
+      <td>${status}</td>
+      <td class="num muted">—</td>
+      <td class="num"><span class="muted" style="font-size:12px">${open?'згорнути':'розгорнути'}</span></td></tr>`);
+    if(open) vs.forEach(v=> rows.push(recRow(i,v,true)));
   });
   $('#rec-rows').innerHTML = rows.join('') ||
     `<tr><td colspan="5" class="muted" style="text-align:center;padding:20px">${(State.q.recipes||'').trim()?'Нічого не знайдено':'Спочатку додай позиції меню.'}</td></tr>`;
 };
-function recRow(i,v,rc){
-  const cnt = v? recipeFor(i.id,v.id).length : recipeFor(i.id,null).length;
+function toggleRecGroup(id){
+  State.recOpen = State.recOpen || {};
+  State.recOpen[id] = !State.recOpen[id];
+  PAGES.recipes();
+}
+function recRow(i,v,sub){
+  const cnt = recipeFor(i.id, v?v.id:null).length;
   const cost = recipeCost(i.id, v?v.id:null);
-  return `<tr><td><b>${esc(i.name)}</b></td><td>${v?esc(v.name):'—'}</td>
+  const name = sub
+    ? `<span style="padding-left:26px;display:inline-block"><span class="muted">↳ розмір</span> <b>${esc(v.name)}</b></span>`
+    : `<b>${esc(i.name)}</b>`;
+  return `<tr${sub?' style="background:#2b2b2e05"':''}><td>${name}</td><td>${v?esc(v.name):'—'}</td>
     <td>${cnt||'<span class="tag danger">не задано</span>'}</td>
     <td class="num">${money(cost)} ₴</td>
     <td class="num"><button class="btn sm" onclick="editRecipe('${i.id}','${v?v.id:''}')">Рецепт</button></td></tr>`;
