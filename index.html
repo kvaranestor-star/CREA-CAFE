@@ -212,7 +212,6 @@ select.inp{appearance:none;-webkit-appearance:none;
 body.kiosk .sidebar{display:none}
 body.kiosk .burger{display:none}
 body.kiosk .main{padding:18px 22px 40px}
-body.kiosk .page-head{display:none}
 body.kiosk .pos{grid-template-columns:1fr 430px}
 body.kiosk .cats{gap:10px;margin-bottom:16px}
 body.kiosk .chip{height:50px;padding:0 22px;font-size:15.5px;border-radius:13px}
@@ -285,7 +284,6 @@ body.kiosk #kiosk-tools{display:flex}
     <div class="logo">CR<b>E</b>A</div>
     <div id="kiosk-tools">
       <button class="btn sm" onclick="go('pos')">🧾 Каса</button>
-      <button class="btn sm ghost" onclick="go('shift')">Зміна</button>
       <button class="btn sm ghost" onclick="go('cash')">Каса ±</button>
     </div>
     <div class="spacer"></div>
@@ -296,7 +294,6 @@ body.kiosk #kiosk-tools{display:flex}
     <aside class="sidebar" id="sidebar">
       <div class="nav-group">Робота</div>
       <div class="nav-item" data-page="pos"><span class="ic">🧾</span> Каса / Продаж</div>
-      <div class="nav-item" data-page="shift"><span class="ic">🔓</span> Зміна</div>
       <div class="nav-item" data-page="cash"><span class="ic">💵</span> Внесення / Винесення</div>
       <div class="nav-group">Меню</div>
       <div class="nav-item" data-page="menu"><span class="ic">☕</span> Меню</div>
@@ -442,11 +439,12 @@ async function loadSettings(){
     const r = await SB.get(`app_settings?select=*&branch_id=eq.${State.branchId}&key=eq.checkbox&limit=1`);
     const row = arr(r)[0];
     State.checkbox = (row && row.value) ? row.value : {enabled:false};
-  }catch(e){ State.checkbox = {enabled:false}; }  // таблиці ще нема — не падаємо
+    State.cbSaved = !!(row && row.value);   // чи власник взагалі зберігав налаштування
+  }catch(e){ State.checkbox = {enabled:false}; State.cbSaved = false; }  // таблиці ще нема — не падаємо
 }
 function cbEnabled(){ return !!(State.checkbox && State.checkbox.enabled); }
-// які види оплати фіскалізувати. Якщо не задано — за замовч. усі три.
-function cbPay(){ const p=State.checkbox&&State.checkbox.pay; return p||{cash:true,card:true,qr:true}; }
+// які види оплати фіскалізувати. Поки власник не обрав — жодного.
+function cbPay(){ const p=State.checkbox&&State.checkbox.pay; return p||{cash:false,card:false,qr:false}; }
 function cbAnyPay(){ const p=cbPay(); return !!(p.cash||p.card||p.qr); }
 function cbFiscalize(method){ return cbEnabled() && !!cbPay()[method]; }
 
@@ -472,7 +470,7 @@ async function loadShift(){
 
 /* ============================ ROUTER ============================ */
 const PAGES = {}; // name -> render()
-const BARISTA_PAGES = ['pos','shift','cash'];   // баристі доступний тільки продаж + зміна/каса
+const BARISTA_PAGES = ['pos','cash'];   // баристі доступний тільки продаж (зі зміною) + каса ±
 function isBarista(){ return State.user && State.user.role === 'barista'; }
 function applyRole(){
   const b = isBarista();
@@ -487,6 +485,7 @@ function logout(){
   $('#lg-pin').value=''; $('#lg-err').textContent='';
 }
 function go(page){
+  if(page==='shift') page='pos';   // зміна тепер живе на сторінці каси
   if(isBarista() && !BARISTA_PAGES.includes(page)) page='pos';  // жорстке обмеження ролі
   State.page = page;
   $$('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.page===page));
@@ -563,8 +562,17 @@ PAGES.pos = function(){
 
   $('#view').innerHTML = `
   <div class="page-head"><h1>Каса</h1><div class="line"></div>
-    ${State.shift?'':'<button class="btn warm" onclick="go(\'shift\')">Відкрити зміну</button>'}</div>
-  ${State.shift?'':'<div class="card" style="margin-bottom:16px;border-color:#b8863b55;background:#fff7e8">⚠️ Зміна закрита — продаж неможливий. Спочатку відкрий зміну.</div>'}
+    ${State.shift?`<span class="muted" style="font-size:12.5px">зміна з ${new Date(State.shift.opened_at).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})}</span>
+      <button class="btn ghost" onclick="closeShiftModal()">🔒 Закрити зміну</button>`:''}</div>
+  ${State.shift?'':`<div class="card" style="margin-bottom:16px;max-width:520px">
+    <h3 style="margin-top:0">🔓 Відкрити зміну</h3>
+    <div class="row" style="align-items:flex-end;gap:10px">
+      <label class="fld" style="margin-bottom:0"><span>Готівка в касі на початок, ₴</span>
+        <input id="sh-start" class="inp" type="number" step="0.01" value="0"></label>
+      <button class="btn" style="flex:0 0 160px" onclick="openShift()">Відкрити зміну</button>
+    </div>
+    <div class="muted" style="font-size:12.5px;margin-top:10px">Продаж заблоковано, поки зміна закрита.</div>
+  </div>`}
   <div class="pos">
     <div>
       <div class="cats">${catChips}</div>
@@ -749,58 +757,50 @@ async function addCustomerFromPOS(){
   }catch(e){ reportErr(e,'Клієнт'); }
 }
 
-/* ============================ PAGE: ЗМІНА ============================ */
-PAGES.shift = function(){
-  const s=State.shift;
-  $('#view').innerHTML = `<div class="page-head"><h1>Зміна</h1><div class="line"></div></div>
-    <div id="shift-body"></div>`;
-  renderShiftBody();
-};
-async function renderShiftBody(){
-  const box=$('#shift-body'); if(!box) return;
-  if(!State.shift){
-    box.innerHTML = `<div class="card" style="max-width:420px">
-      <h3 style="margin-top:0">Відкрити зміну</h3>
-      <label class="fld"><span>Готівка в касі на початок, ₴</span>
-        <input id="sh-start" class="inp" type="number" step="0.01" value="0"></label>
-      <button class="btn block" onclick="openShift()">🔓 Відкрити зміну</button></div>`;
-    return;
-  }
-  const s=State.shift;
-  // зведення по зміні
-  const [sales, ops] = await Promise.all([
-    SB.get(`sales?select=*&shift_id=eq.${s.id}`),
-    SB.get(`cash_ops?select=*&shift_id=eq.${s.id}`),
-  ]);
-  const S=arr(sales), O=arr(ops);
-  const sale = S.filter(x=>x.type==='sale');
-  const cashSales = sale.filter(x=>x.payment_method==='cash').reduce((a,b)=>a+num(b.total),0);
-  const cardSales = sale.filter(x=>x.payment_method==='card').reduce((a,b)=>a+num(b.total),0);
-  const qrSales   = sale.filter(x=>x.payment_method==='qr').reduce((a,b)=>a+num(b.total),0);
-  const rev = cashSales+cardSales+qrSales;
-  const cashIn = O.filter(x=>x.type==='in').reduce((a,b)=>a+num(b.amount),0);
-  const cashOut= O.filter(x=>x.type==='out').reduce((a,b)=>a+num(b.amount),0);
-  const expectedCash = round2(num(s.cash_start)+cashSales+cashIn-cashOut);
-  const avg = sale.length? rev/sale.length : 0;
-  box.innerHTML = `
-   <div class="kpis" style="margin-bottom:16px">
-     <div class="kpi"><div class="k">Виручка</div><div class="v">${money(rev)} ₴</div><div class="s">${sale.length} чеків · сер. ${money(avg)} ₴</div></div>
-     <div class="kpi"><div class="k">Готівка</div><div class="v">${money(cashSales)} ₴</div></div>
-     <div class="kpi"><div class="k">Картка</div><div class="v">${money(cardSales)} ₴</div></div>
-     <div class="kpi"><div class="k">QR</div><div class="v">${money(qrSales)} ₴</div></div>
-     <div class="kpi"><div class="k">Готівка в касі (розрах.)</div><div class="v">${money(expectedCash)} ₴</div>
-       <div class="s">старт ${money(s.cash_start)} + внес. ${money(cashIn)} − винос. ${money(cashOut)}</div></div>
-   </div>
-   <div class="card" style="max-width:460px">
-     <h3 style="margin-top:0">Закрити зміну (Z-звіт)</h3>
-     <div class="muted" style="font-size:13px;margin-bottom:10px">Відкрита: ${new Date(s.opened_at).toLocaleString('uk-UA')}</div>
-     <label class="fld"><span>Фактична готівка в касі, ₴</span>
-       <input id="sh-end" class="inp" type="number" step="0.01" value="${round2(expectedCash)}"></label>
-     <button class="btn block" onclick="closeShift(${expectedCash})">🔒 Закрити зміну</button>
-   </div>`;
+/* ============================ ЗМІНА (модалка на сторінці каси) ============================ */
+async function closeShiftModal(){
+  const s=State.shift; if(!s) return;
+  modal('Закриття зміни (Z-звіт)','<div class="muted">Рахую зведення…</div>','');
+  try{
+    const [sales, ops] = await Promise.all([
+      SB.get(`sales?select=*&shift_id=eq.${s.id}`),
+      SB.get(`cash_ops?select=*&shift_id=eq.${s.id}`),
+    ]);
+    const S=arr(sales), O=arr(ops);
+    const sale = S.filter(x=>x.type==='sale');
+    const cashSales = sale.filter(x=>x.payment_method==='cash').reduce((a,b)=>a+num(b.total),0);
+    const cardSales = sale.filter(x=>x.payment_method==='card').reduce((a,b)=>a+num(b.total),0);
+    const qrSales   = sale.filter(x=>x.payment_method==='qr').reduce((a,b)=>a+num(b.total),0);
+    const rev = cashSales+cardSales+qrSales;
+    const cashIn = O.filter(x=>x.type==='in').reduce((a,b)=>a+num(b.amount),0);
+    const cashOut= O.filter(x=>x.type==='out').reduce((a,b)=>a+num(b.amount),0);
+    const expectedCash = round2(num(s.cash_start)+cashSales+cashIn-cashOut);
+    const avg = sale.length? rev/sale.length : 0;
+    const line=(k,v)=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)"><span class="muted">${k}</span><b>${v}</b></div>`;
+    modal('Закриття зміни (Z-звіт)',
+     `<div class="muted" style="font-size:12.5px;margin-bottom:8px">Відкрита: ${new Date(s.opened_at).toLocaleString('uk-UA')}</div>
+      ${line('Виручка', money(rev)+' ₴ · '+sale.length+' чеків')}
+      ${line('Середній чек', money(avg)+' ₴')}
+      ${line('💵 Готівка', money(cashSales)+' ₴')}
+      ${line('💳 Картка', money(cardSales)+' ₴')}
+      ${line('📱 QR', money(qrSales)+' ₴')}
+      ${line('Внесення / Винесення', '+'+money(cashIn)+' / −'+money(cashOut)+' ₴')}
+      ${line('Готівка в касі (розрахунково)', money(expectedCash)+' ₴')}
+      <label class="fld" style="margin-top:14px"><span>Фактична готівка в касі, ₴</span>
+        <input id="sh-end" class="inp" type="number" step="0.01" value="${round2(expectedCash)}"></label>`,
+     `<button class="btn ghost" onclick="closeModal()">Відміна</button>
+      <button class="btn" onclick="closeShift(${expectedCash})">🔒 Закрити зміну</button>`);
+  }catch(e){ closeModal(); reportErr(e,'Зведення зміни'); }
 }
 async function openShift(){
-  // якщо ПРРО увімкнено, але не обрано жодного виду оплати для фіскалізації — не відкривати зміну
+  // 1) власник ще ВЗАГАЛІ не зберігав налаштування фіскалізації — зміну не відкриваємо
+  if(!State.cbSaved){
+    toast('Спочатку налаштуй фіскалізацію (Налаштування → Checkbox)','err');
+    alert('Перед першою зміною власник має зайти в Налаштування → Checkbox і зберегти вибір:\n\n• увімкнути фіскалізацію й позначити, які види оплати фіскалізувати (готівка / картка / QR),\n• або свідомо зберегти з ВИМКНЕНОЮ фіскалізацією (робота без ПРРО).\n\nБез цього відкрити зміну не можна.'+(State.user.role==='barista'?'\n\nЗвернись до власника.':''));
+    if(State.user.role!=='barista') go('settings');
+    return;
+  }
+  // 2) фіскалізацію увімкнено, але не обрано жодного виду оплати — теж блок
   if(cbEnabled() && !cbAnyPay()){
     toast('Оберіть хоча б один вид оплати для фіскалізації (Налаштування → Checkbox)','err');
     alert('Фіскалізацію Checkbox увімкнено, але не обрано жодного виду оплати.\n\nЗайдіть у Налаштування → Checkbox і позначте, які оплати фіскалізувати (готівка / картка / QR), або вимкніть фіскалізацію. Без цього відкрити зміну не можна.');
@@ -831,7 +831,7 @@ async function closeShift(expected){
     }
     const r=await SB.patch(`shifts?id=eq.${State.shift.id}`,{status:'closed', closed_at:new Date().toISOString(), closed_by:State.user.id, cash_end:end});
     if(sbErr(r)) throw r;
-    State.shift=null; refreshTopbar(); toast('Зміну закрито','ok'); go('reports');
+    State.shift=null; closeModal(); refreshTopbar(); toast('Зміну закрито','ok'); go('reports');
   }catch(e){ reportErr(e,'Закриття зміни'); }
 }
 
@@ -1417,7 +1417,7 @@ async function saveCheckbox(){
     const existing = arr(await SB.get(`app_settings?select=id&branch_id=eq.${State.branchId}&key=eq.checkbox&limit=1`))[0];
     if(existing){ const r=await SB.patch(`app_settings?id=eq.${existing.id}`,{value:cfg,updated_at:new Date().toISOString()}); if(sbErr(r))throw r; }
     else { const r=await SB.post('app_settings', withBranch({key:'checkbox',value:cfg})); if(sbErr(r))throw r; }
-    State.checkbox=cfg;
+    State.checkbox=cfg; State.cbSaved=true;
     toast('Налаштування Checkbox збережено','ok');
     $('#cb-status').textContent = cfg.enabled? 'Фіскалізація увімкнена.' : 'Фіскалізація вимкнена.';
   }catch(e){ reportErr(e,'Checkbox налаштування'); }
