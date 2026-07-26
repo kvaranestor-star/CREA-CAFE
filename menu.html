@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#F4EEE1">
+<title>CREA — меню</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ivory:#F4EEE1; --paper:#FBF7EE; --anthracite:#2B2B2E; --muted:#8b8578;
+  --line:#2b2b2e18; --line-2:#2b2b2e2b; --warm:#C9A66B;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--ivory);color:var(--anthracite);
+  font-family:'Montserrat',system-ui,sans-serif;font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased}
+.wrap{max-width:640px;margin:0 auto;padding:26px 18px 70px}
+.brand{text-align:center;margin:18px 0 6px;font-weight:800;font-size:38px;letter-spacing:.22em;text-transform:uppercase;position:relative}
+.brand::after{content:'';position:absolute;left:50%;bottom:-12px;transform:translateX(-50%);width:56px;height:3px;background:var(--warm);border-radius:3px}
+.sub{text-align:center;color:var(--muted);letter-spacing:.3em;font-size:10.5px;text-transform:uppercase;margin:22px 0 26px}
+.cat-nav{display:flex;gap:8px;overflow-x:auto;padding:4px 2px 12px;position:sticky;top:0;background:linear-gradient(var(--ivory) 85%,transparent);z-index:5;scrollbar-width:none}
+.cat-nav::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;height:38px;padding:0 16px;border-radius:11px;border:1px solid var(--line-2);
+  background:var(--paper);font-weight:600;font-size:13.5px;display:inline-flex;align-items:center;gap:6px;
+  color:inherit;text-decoration:none;white-space:nowrap}
+.cat{margin-top:26px}
+.cat h2{font-size:15px;letter-spacing:.14em;text-transform:uppercase;font-weight:800;
+  display:flex;align-items:center;gap:12px;margin:0 0 12px}
+.cat h2::after{content:'';flex:1;height:1px;background:var(--line)}
+.item{background:var(--paper);border:1px solid var(--line);border-radius:15px;padding:15px 16px;margin-bottom:10px}
+.item .top{display:flex;align-items:baseline;gap:10px}
+.item .em{font-size:22px;line-height:1}
+.item .nm{font-weight:700;font-size:16px;flex:1}
+.item .pr{font-weight:800;font-size:16px;white-space:nowrap}
+.item .desc{color:var(--muted);font-size:13.5px;margin-top:5px}
+.item .meta{color:var(--muted);font-size:12.5px;margin-top:4px}
+.sizes{margin-top:9px;display:flex;flex-direction:column;gap:5px}
+.size{display:flex;align-items:baseline;gap:8px;font-size:14px}
+.size .dots{flex:1;border-bottom:1px dotted var(--line-2);transform:translateY(-3px)}
+.size b{white-space:nowrap}
+.mods{margin-top:8px;font-size:12.5px;color:var(--muted)}
+.loading,.err{text-align:center;padding:60px 20px;color:var(--muted)}
+.footer{text-align:center;color:var(--muted);font-size:11px;letter-spacing:.2em;text-transform:uppercase;margin-top:44px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">CREA</div>
+  <div class="sub">меню</div>
+  <div id="app"><div class="loading">Завантаження меню…</div></div>
+  <div class="footer">CREA COFFEE</div>
+</div>
+<script>
+/* Публічне онлайн-меню CREA. Дані тягнуться напряму з Supabase (anon key). */
+const CONFIG = {
+  SUPABASE_URL:      'https://podbkulmoqlmpenymnms.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_HXD6eqN5g3j6ExUD-jUYgg_t1xnbZoh',
+};
+const esc = s => (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num = v => { const x=parseFloat(v); return isNaN(x)?0:x; };
+const money = n => (Math.round(num(n)*100)/100).toLocaleString('uk-UA',{minimumFractionDigits:0,maximumFractionDigits:2});
+async function sb(path){
+  const r = await fetch(CONFIG.SUPABASE_URL.replace(/\/+$/,'')+'/rest/v1/'+path,{
+    headers:{'apikey':CONFIG.SUPABASE_ANON_KEY,'Authorization':'Bearer '+CONFIG.SUPABASE_ANON_KEY}});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return r.json();
+}
+const arr = x => Array.isArray(x)?x:[];
+
+let R={cats:[],items:[],vars:[],mods:[],imods:[]};
+function itemModNames(itemId){
+  const ids=R.imods.filter(x=>x.menu_item_id===itemId).map(x=>x.modifier_id);
+  return R.mods.filter(m=>ids.includes(m.id) && m.is_active!==false)
+    .map(m=>esc(m.name)+' +'+money(m.price)+' ₴');
+}
+async function load(){
+  const box=document.getElementById('app');
+  try{
+    const branches = arr(await sb('branches?select=id&order=created_at&limit=1'));
+    if(!branches.length){ box.innerHTML='<div class="err">Меню недоступне.</div>'; return; }
+    const bid=branches[0].id, q=`branch_id=eq.${bid}`;
+    const [cats,items,vars,mods,imods] = await Promise.all([
+      sb(`menu_categories?select=*&${q}&order=sort,name`),
+      sb(`menu_items?select=*&${q}&is_active=eq.true&order=sort,name`),
+      sb('menu_variants?select=*&order=sort'),
+      sb(`modifiers?select=*&${q}`),
+      sb('menu_item_modifiers?select=*'),
+    ]);
+    R={cats:arr(cats),items:arr(items),vars:arr(vars),mods:arr(mods),imods:arr(imods)};
+    render(box);
+  }catch(e){
+    console.error(e);
+    box.innerHTML='<div class="err">Не вдалося завантажити меню.<br>Спробуйте оновити сторінку.</div>';
+  }
+}
+function render(box){
+  if(!R.items.length){ box.innerHTML='<div class="err">Меню поки порожнє.</div>'; return; }
+  const groups=[...R.cats, {id:null,name:'Інше'}];
+  const nav=[], sections=[];
+  groups.forEach((c,gi)=>{
+    const its=R.items.filter(i=> (c.id? i.category_id===c.id : !i.category_id));
+    if(!its.length) return;
+    const aid='cat'+gi;
+    nav.push(`<a class="chip" href="#${aid}">${c.emoji?esc(c.emoji)+' ':''}${esc(c.name)}</a>`);
+    sections.push(`<div class="cat" id="${aid}"><h2>${c.emoji?esc(c.emoji)+' ':''}${esc(c.name)}</h2>
+      ${its.map(i=>{
+        const vs=R.vars.filter(v=>v.menu_item_id===i.id);
+        const modNames=itemModNames(i.id);
+        const body = vs.length? `<div class="sizes">${vs.map(v=>
+            `<div class="size"><span>${esc(v.name)}</span><span class="dots"></span><b>${money(v.price)} ₴</b></div>`
+          ).join('')}</div>` : '';
+        return `<div class="item">
+          <div class="top">${i.emoji?`<span class="em">${esc(i.emoji)}</span>`:''}
+            <span class="nm">${esc(i.name)}</span>
+            ${vs.length?'':`<span class="pr">${money(i.price)} ₴</span>`}</div>
+          ${i.description?`<div class="desc">${esc(i.description)}</div>`:''}
+          ${i.volume?`<div class="meta">${esc(i.volume)}</div>`:''}
+          ${body}
+          ${modNames.length?`<div class="mods">Додатки: ${modNames.join(' · ')}</div>`:''}
+        </div>`;
+      }).join('')}</div>`);
+  });
+  box.innerHTML = `<div class="cat-nav">${nav.join('')}</div>${sections.join('')}`;
+}
+load();
+</script>
+</body>
+</html>
