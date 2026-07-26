@@ -487,7 +487,6 @@ function logout(){
 function go(page){
   if(page==='shift') page='cash';   // зміна живе у пункті «Каса»
   if(isBarista() && !BARISTA_PAGES.includes(page)) page='pos';  // жорстке обмеження ролі
-  if(page==='pos' && !State.shift){ page='cash'; toast('Спочатку відкрий зміну','err'); }  // без зміни Магазин закритий
   State.page = page;
   $$('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.page===page));
   $('#sidebar').classList.remove('open'); $('#mask').classList.remove('show');
@@ -755,15 +754,15 @@ async function addCustomerFromPOS(){
 async function renderShiftBlock(){
   const box=$('#shift-block'); if(!box) return;
   if(!State.shift){
-    box.innerHTML = `<div style="display:flex;justify-content:center;padding:30px 0">
-      <div class="card" style="max-width:440px;width:100%;text-align:center;padding:34px 28px">
-        <div style="font-size:44px">🔒</div>
-        <h3 style="margin:12px 0 6px;font-size:18px">Зміна закрита</h3>
-        <div class="muted" style="font-size:13px;margin-bottom:20px">Щоб користуватися програмою — Магазином і касовими операціями — спочатку відкрий зміну.</div>
-        <label class="fld" style="text-align:left"><span>Готівка в касі на початок, ₴</span>
-          <input id="sh-start" class="inp" type="number" step="0.01" value="0"></label>
-        <button class="btn block" onclick="openShift()">🔓 Відкрити зміну</button>
-      </div></div>`;
+    box.innerHTML = `<div class="card" style="max-width:520px">
+        <h3 style="margin:0 0 6px;font-size:17px">🔓 Відкрити зміну</h3>
+        <div class="muted" style="font-size:13px;margin-bottom:14px">Вкажи готівку в касі на початок дня. Продаж у Магазині стане доступним після відкриття.</div>
+        <div class="row" style="align-items:flex-end;gap:10px">
+          <label class="fld" style="margin-bottom:0"><span>Готівка на початок, ₴</span>
+            <input id="sh-start" class="inp" type="number" step="0.01" value="0"></label>
+          <button class="btn co-btn" onclick="openShift()">Відкрити зміну</button>
+        </div>
+      </div>`;
     return;
   }
   const s=State.shift;
@@ -848,11 +847,10 @@ async function closeShift(expected){
 
 /* ============================ PAGE: ВНЕСЕННЯ/ВИНЕСЕННЯ ============================ */
 PAGES.cash = function(){
-  const open = !!State.shift;
   $('#view').innerHTML = `<div class="page-head"><h1>Каса</h1><div class="line"></div>
-    <span class="muted" style="font-size:12.5px">${open?('зміна з '+new Date(State.shift.opened_at).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})):'зміна закрита'}</span></div>
+    <span class="muted" style="font-size:12.5px">${State.shift?('зміна з '+new Date(State.shift.opened_at).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})):'зміна закрита'}</span></div>
    <div id="shift-block" style="margin-bottom:20px"></div>
-   ${open?`<div style="font-family:'Benzin','Montserrat';font-weight:800;text-transform:uppercase;letter-spacing:.05em;font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:12px">Внесення / Винесення<span style="flex:1;height:1px;background:var(--line)"></span></div>
+   <div style="font-family:'Benzin','Montserrat';font-weight:800;text-transform:uppercase;letter-spacing:.05em;font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:12px">Внесення / Винесення<span style="flex:1;height:1px;background:var(--line)"></span></div>
    <div class="card" style="margin-bottom:16px">
      <div class="cats" style="margin-bottom:12px">
        <button type="button" id="co-tab-in"  class="chip active" onclick="cashTab('in')">➕ Внесення</button>
@@ -865,9 +863,10 @@ PAGES.cash = function(){
        <button id="co-btn" class="btn co-btn" onclick="cashOp(window.__coType||'in')">Внести</button>
      </div>
    </div>
-   <div id="cash-list"></div>`:''}`;
+   <div id="cash-list"></div>`;
   renderShiftBlock();
-  if(open){ cashTab('in'); renderCashList(); }
+  cashTab('in');
+  renderCashList();
 };
 function cashTab(type){
   window.__coType=type;
@@ -890,7 +889,6 @@ async function renderCashList(){
   box.innerHTML=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Час</th><th>Тип</th><th>Стаття</th><th>Коментар</th><th class="num">Сума</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 async function cashOp(type){
-  if(!State.shift){ toast('Спочатку відкрий зміну','err'); return; }
   const cat=$('#co-cat').value;
   const amt=round2(num($('#co-amt').value));
   const note=$('#co-note').value.trim();
