@@ -990,8 +990,12 @@ function editItem(id){
         ${vs.map(v=>varRow(v.name,v.price)).join('')}
       </div>
       <button type="button" class="btn sm ghost" style="margin-top:6px" onclick="addVarRow()">+ розмір</button></div>
-    ${allMods.length?`<div class="fld"><span style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700">Дозволені модифікатори</span>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${allMods.map(m=>`<label class="chip" style="cursor:pointer"><input type="checkbox" class="im-chk" data-mid="${m.id}" ${curMods.includes(m.id)?'checked':''} style="margin-right:6px">${esc(m.name)} +${money(m.price)}</label>`).join('')}</div></div>`:'<div class="muted" style="font-size:12px;margin:8px 0">Модифікатори створюються у розділі «Техкарти».</div>'}
+    <div class="fld"><span style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700">Додатки (доп. молоко, сироп…)</span>
+      ${allMods.length?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${allMods.map(m=>`<label class="chip" style="cursor:pointer"><input type="checkbox" class="im-chk" data-mid="${m.id}" ${curMods.includes(m.id)?'checked':''} style="margin-right:6px">${esc(m.name)} +${money(m.price)}</label>`).join('')}</div>`:''}
+      <div id="newmod-rows"></div>
+      <button type="button" class="btn sm ghost" style="margin-top:8px" onclick="addNewModRow()">+ Додаток з інгредієнта</button>
+      <div class="muted" style="font-size:11.5px;margin-top:5px">Не треба створювати «Еспресо з молоком» окремо — додай молоко як додаток: вкажи +ціну, інгредієнт і скільки списувати зі складу при продажу. Створений додаток збережеться й буде доступний іншим позиціям.</div>
+    </div>
     <label class="fld"><span>Активна</span><select id="i-active" class="inp"><option value="1" ${i.is_active!==false?'selected':''}>Так</option><option value="0" ${i.is_active===false?'selected':''}>Ні (прихована)</option></select></label>`,
    `${id?`<button class="btn danger" onclick="delItem('${id}')">Видалити</button>`:''}
     <div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
@@ -999,6 +1003,16 @@ function editItem(id){
 }
 function varRow(name,price){ return `<div class="row var-row" style="gap:8px"><input class="inp v-name" placeholder="S / M / L" value="${esc(name||'')}"><input class="inp v-price" type="number" step="0.01" placeholder="ціна" value="${price!=null?price:''}"><button type="button" class="btn ghost" style="flex:0 0 44px" onclick="this.closest('.var-row').remove()">✕</button></div>`; }
 function addVarRow(){ $('#var-rows').insertAdjacentHTML('beforeend', varRow('','')); }
+function newModRow(){
+  const opts = `<option value="">— без списання —</option>`+State.ingredients.map(g=>`<option value="${g.id}">${esc(g.name)} (${UNITS[g.unit]||g.unit})</option>`).join('');
+  return `<div class="nm-row" style="display:grid;grid-template-columns:1.4fr .7fr 1.3fr .7fr 40px;gap:7px;margin-top:7px;align-items:center">
+    <input class="inp nm-name" placeholder="Доп. молоко">
+    <input class="inp nm-price" type="number" step="0.01" placeholder="+₴">
+    <select class="inp nm-ing">${opts}</select>
+    <input class="inp nm-qty" type="number" step="0.001" placeholder="к-сть">
+    <button type="button" class="btn ghost" style="padding:0" onclick="this.closest('.nm-row').remove()">✕</button></div>`;
+}
+function addNewModRow(){ $('#newmod-rows').insertAdjacentHTML('beforeend', newModRow()); }
 async function saveItem(id){
   const d={name:$('#i-name').value.trim(), emoji:$('#i-emoji').value.trim(),
     category_id:$('#i-cat').value||null, price:round2(num($('#i-price').value)),
@@ -1013,9 +1027,21 @@ async function saveItem(id){
     const vrows=$$('.var-row').map((row,i)=>({menu_item_id:itemId,name:$('.v-name',row).value.trim(),price:round2(num($('.v-price',row).value)),sort:i}))
       .filter(v=>v.name);
     if(vrows.length){ const r=await SB.post('menu_variants',vrows); if(sbErr(r))throw r; }
-    // модифікатори
+    // нові додатки, створені прямо у формі товару
+    const createdIds=[];
+    for(const row of $$('.nm-row')){
+      const nm=$('.nm-name',row).value.trim();
+      if(!nm) continue;
+      const md={name:nm, price:round2(num($('.nm-price',row).value)),
+        ingredient_id:$('.nm-ing',row).value||null, qty:round2(num($('.nm-qty',row).value)), is_active:true};
+      const rm=await SB.post('modifiers', withBranch(md)); if(sbErr(rm))throw rm;
+      createdIds.push((Array.isArray(rm)?rm[0]:rm).id);
+    }
+    if(createdIds.length) State.modifiers=arr(await SB.get(`modifiers?select=*&branch_id=eq.${State.branchId}&order=name`));
+    // модифікатори: обрані існуючі + щойно створені
     await SB.del(`menu_item_modifiers?menu_item_id=eq.${itemId}`);
-    const mchk=$$('.im-chk:checked').map(c=>({menu_item_id:itemId,modifier_id:c.dataset.mid}));
+    const mchk=$$('.im-chk:checked').map(c=>({menu_item_id:itemId,modifier_id:c.dataset.mid}))
+      .concat(createdIds.map(mid=>({menu_item_id:itemId,modifier_id:mid})));
     if(mchk.length){ const r=await SB.post('menu_item_modifiers',mchk); if(sbErr(r))throw r; }
     closeModal(); await reloadMenu(); PAGES.menu(); toast('Збережено','ok');
   }catch(e){ reportErr(e,'Позиція'); }
@@ -1082,10 +1108,11 @@ function editRecipe(itemId, variantId){
     <div id="rec-list" style="display:flex;flex-direction:column;gap:6px">
       ${cur.map(r=>recIngRow(opts,r.ingredient_id,r.qty)).join('')}
     </div>
-    <button type="button" class="btn sm ghost" style="margin-top:8px" onclick="addRecRow(\`${opts.replace(/`/g,'')}\`)">+ інгредієнт</button>`,
+    <button type="button" class="btn sm ghost" style="margin-top:8px" onclick="addRecRow()">+ інгредієнт</button>`,
    `<div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
     <button class="btn" onclick="saveRecipe('${itemId}','${variantId||''}')">Зберегти рецепт</button>`);
   window.__recOpts = opts;
+  if(!cur.length) addRecRow();   // одразу порожній рядок, щоб не тицяти зайвий раз
 }
 function recIngRow(opts,ingId,qty){
   return `<div class="row rec-row" style="gap:8px">
