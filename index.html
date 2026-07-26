@@ -468,6 +468,31 @@ async function loadShift(){
   State.shift = arr(r)[0] || null;
 }
 
+/* ---------------- АВТОСИНХРОНІЗАЦІЯ (власник ↔ бариста) ----------------
+   Кожні 20с (і при поверненні до вкладки) тихо перезавантажуємо довідники.
+   Якщо щось змінилось — перемальовуємо поточну сторінку.
+   Не чіпаємо екран, коли відкрита модалка або користувач щось вводить. */
+async function syncData(){
+  if(!State.user || window.__syncBusy) return;
+  if($('#modal').classList.contains('show')) return;                       // не збивати відкриту форму
+  const ae=document.activeElement;
+  if(ae && /INPUT|SELECT|TEXTAREA/.test(ae.tagName)) return;               // не збивати введення
+  window.__syncBusy=true;
+  try{
+    const key=()=>JSON.stringify([State.ingredients,State.categories,State.items,State.variants,
+      State.modifiers,State.itemMods,State.recipes,State.suppliers,State.customers,State.users,
+      State.shift,State.checkbox]);
+    const before=key();
+    await loadAll();
+    if(key()!==before){
+      refreshTopbar();
+      const fn=PAGES[State.page];
+      if(fn){ try{ fn(); }catch(e){ console.error('sync render',e); } }
+    }
+  }catch(e){ /* мережа моргнула — спробуємо наступного разу */ }
+  finally{ window.__syncBusy=false; }
+}
+
 /* ============================ ROUTER ============================ */
 const PAGES = {}; // name -> render()
 const BARISTA_PAGES = ['pos','cash'];   // баристі доступний тільки продаж (зі зміною) + каса ±
@@ -1530,6 +1555,10 @@ function boot(){
   $('#mask').addEventListener('click',()=>{ $('#sidebar').classList.remove('open'); $('#mask').classList.remove('show'); });
   $('#lg-btn').addEventListener('click',doLogin);
   $('#lg-pin').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
+  // автосинхронізація довідників між пристроями
+  setInterval(syncData, 20000);
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) syncData(); });
+  window.addEventListener('focus', ()=>syncData());
   // splash → login
   setTimeout(()=>{ $('#splash').classList.add('hide'); $('#login').classList.add('show'); },900);
 }
