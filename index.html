@@ -1009,7 +1009,7 @@ PAGES.menu = function(){
           : margin<0  ? `<span class="tag danger">⚠ ЗБИТОК ${money(margin)} ₴</span>`
           : margin===0? `<span class="tag danger">в нуль</span>`
           : `<span class="tag ok">+${money(margin)} ₴ · ${markup}%</span>`;
-        return `<tr><td style="font-size:20px">${i.emoji?esc(i.emoji):'☕'}</td>
+        return `<tr><td>${i.photo_url?`<img src="${esc(i.photo_url)}" alt="" loading="lazy" style="width:36px;height:36px;border-radius:9px;object-fit:cover;display:block">`:`<span style="font-size:20px">${i.emoji?esc(i.emoji):'☕'}</span>`}</td>
           <td><b>${esc(i.name)}</b> ${i.is_active===false?'<span class="tag danger">off</span>':''}</td>
           <td>${priceStr}</td>
           <td class="num">${baseCost>0? money(baseCost)+' ₴' : '—'}</td>
@@ -1037,6 +1037,7 @@ async function saveCategory(id){
 }
 function editItem(id){
   const i = id? item(id) : {name:'',emoji:'',price:0,category_id:null,is_active:true,sort:0};
+  window.__photoUrl = i.photo_url || '';
   const catOpts = `<option value="">— без категорії —</option>`+State.categories.map(c=>`<option value="${c.id}" ${i.category_id===c.id?'selected':''}>${esc(c.name)}</option>`).join('');
   const vs = id? itemVariants(id):[];
   const allMods = State.modifiers;
@@ -1047,6 +1048,15 @@ function editItem(id){
     <label class="fld"><span>Категорія</span><select id="i-cat" class="inp">${catOpts}</select></label>
     <label class="fld"><span>Опис (для онлайн-меню)</span><textarea id="i-desc" class="inp" rows="2" placeholder="Напр.: подвійний еспресо на зерні світлого обсмаження">${esc(i.description||'')}</textarea></label>
     <label class="fld"><span>Об'єм / грамовка (для онлайн-меню)</span><input id="i-volume" class="inp" value="${esc(i.volume||'')}" placeholder="Напр.: 250 мл або 120 г (для розмірів: 250/350/450 мл)"></label>
+    <div class="fld"><span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:6px">Фото (для онлайн-меню)</span>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div id="ph-prev" style="width:76px;height:76px;flex:0 0 76px;border-radius:12px;border:1px solid var(--line-2);background:#fff center/cover no-repeat;${i.photo_url?`background-image:url('${esc(i.photo_url)}')`:''}"></div>
+        <button type="button" class="btn sm ghost" onclick="$('#ph-file').click()">📷 Завантажити фото</button>
+        <button type="button" class="btn sm ghost" id="ph-del" style="${i.photo_url?'':'display:none'}" onclick="removeItemPhoto()">✕ Прибрати</button>
+        <input type="file" id="ph-file" accept="image/*" style="display:none" onchange="uploadItemPhoto(this)">
+      </div>
+      <div class="muted" id="ph-status" style="font-size:11.5px;margin-top:5px"></div>
+    </div>
     <label class="fld"><span>Базова ціна, ₴ (якщо без розмірів)</span><input id="i-price" class="inp" type="number" step="0.01" value="${i.price||0}"></label>
     <div class="fld"><span style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700">Розміри (S/M/L) — опційно</span>
       <div id="var-rows" style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
@@ -1066,6 +1076,52 @@ function editItem(id){
 }
 function varRow(name,price){ return `<div class="row var-row" style="gap:8px"><input class="inp v-name" placeholder="S / M / L" value="${esc(name||'')}"><input class="inp v-price" type="number" step="0.01" placeholder="ціна" value="${price!=null?price:''}"><button type="button" class="btn ghost" style="flex:0 0 44px" onclick="this.closest('.var-row').remove()">✕</button></div>`; }
 function addVarRow(){ $('#var-rows').insertAdjacentHTML('beforeend', varRow('','')); }
+/* ---------- фото товару (Supabase Storage, bucket «menu») ---------- */
+function resizeImage(file, maxSide, quality){
+  return new Promise((res,rej)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const k=Math.min(1, maxSide/Math.max(img.width,img.height));
+      const c=document.createElement('canvas');
+      c.width=Math.round(img.width*k); c.height=Math.round(img.height*k);
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+      c.toBlob(b=>b?res(b):rej(new Error('canvas toBlob')), 'image/jpeg', quality);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror=()=>rej(new Error('Не вдалося прочитати зображення'));
+    img.src=URL.createObjectURL(file);
+  });
+}
+async function uploadItemPhoto(inp){
+  const f=inp.files && inp.files[0]; if(!f) return;
+  const st=$('#ph-status');
+  try{
+    st.textContent='Стискаю фото…';
+    const blob=await resizeImage(f, 800, 0.82);
+    st.textContent='Завантажую…';
+    const name='item-'+uid()+'.jpg';
+    const res=await fetch(CONFIG.SUPABASE_URL.replace(/\/+$/,'')+'/storage/v1/object/menu/'+name,{
+      method:'POST',
+      headers:{'apikey':CONFIG.SUPABASE_ANON_KEY,'Authorization':'Bearer '+CONFIG.SUPABASE_ANON_KEY,
+               'Content-Type':'image/jpeg','x-upsert':'true'},
+      body: blob});
+    if(!res.ok){ const t=await res.text(); throw new Error(t.slice(0,160)||('HTTP '+res.status)); }
+    window.__photoUrl = CONFIG.SUPABASE_URL.replace(/\/+$/,'')+'/storage/v1/object/public/menu/'+name;
+    $('#ph-prev').style.backgroundImage=`url('${window.__photoUrl}')`;
+    $('#ph-del').style.display='';
+    st.textContent='Фото завантажено ✓ — не забудь «Зберегти»';
+  }catch(e){
+    console.error(e);
+    st.textContent='Помилка завантаження: '+(e.message||e)+'. Перевір, чи прогнана migration_photos.sql.';
+    toast('Фото не завантажилось','err');
+  }finally{ inp.value=''; }
+}
+function removeItemPhoto(){
+  window.__photoUrl='';
+  $('#ph-prev').style.backgroundImage='';
+  $('#ph-del').style.display='none';
+  $('#ph-status').textContent='Фото прибрано — збережеться після «Зберегти»';
+}
 function newModRow(){
   const opts = `<option value="">— без списання —</option>`+State.ingredients.map(g=>`<option value="${g.id}">${esc(g.name)} (${UNITS[g.unit]||g.unit})</option>`).join('');
   return `<div class="nm-row" style="display:grid;grid-template-columns:1.4fr .7fr 1.3fr .7fr 40px;gap:7px;margin-top:7px;align-items:center">
@@ -1081,6 +1137,7 @@ async function saveItem(id){
     category_id:$('#i-cat').value||null, price:round2(num($('#i-price').value)),
     description:$('#i-desc').value.trim(),
     volume:$('#i-volume').value.trim(),
+    photo_url: window.__photoUrl || null,
     is_active:$('#i-active').value==='1'};
   if(!d.name){toast('Назва порожня','err');return;}
   try{
