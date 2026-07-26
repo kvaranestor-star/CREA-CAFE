@@ -904,11 +904,92 @@ PAGES.cash = function(){
        <button id="co-btn" class="btn co-btn" onclick="cashOp(window.__coType||'in')">Внести</button>
      </div>
    </div>
-   <div id="cash-list"></div>`;
+   <div id="cash-list"></div>
+   ${State.shift?`<div style="font-family:'Benzin','Montserrat';font-weight:800;text-transform:uppercase;letter-spacing:.05em;font-size:14px;margin:22px 0 10px;display:flex;align-items:center;gap:12px">Повернення чека<span style="flex:1;height:1px;background:var(--line)"></span></div>
+   <div id="returns-list"></div>`:''}`;
   renderShiftBlock();
   cashTab('in');
   renderCashList();
+  renderReturnsList();
 };
+/* ---------- ПОВЕРНЕННЯ ЧЕКА ---------- */
+async function renderReturnsList(){
+  const box=$('#returns-list'); if(!box || !State.shift) return;
+  try{
+    const r=await SB.get(`sales?select=*&shift_id=eq.${State.shift.id}&type=eq.sale&order=created_at.desc&limit=25`);
+    const rows=arr(r).map(s=>`<tr>
+      <td>${new Date(s.created_at).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})}</td>
+      <td>${esc(s.item_name||'—')}</td>
+      <td>${s.payment_method==='cash'?'💵':s.payment_method==='qr'?'📱':'💳'}</td>
+      <td class="num"><b>${money(s.total)} ₴</b></td>
+      <td class="num"><button class="btn sm danger" onclick="openReturn('${s.id}')">↩ Повернути</button></td></tr>`).join('');
+    box.innerHTML=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Час</th><th>Чек</th><th></th><th class="num">Сума</th><th style="width:130px"></th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="5" class="muted" style="text-align:center;padding:16px">Чеків у цій зміні ще немає</td></tr>'}</tbody></table></div>`;
+  }catch(e){ box.innerHTML=''; }
+}
+async function openReturn(saleId){
+  try{
+    const [sr,ir]=await Promise.all([
+      SB.get(`sales?select=*&id=eq.${saleId}&limit=1`),
+      SB.get(`sale_items?select=*&sale_id=eq.${saleId}`),
+    ]);
+    const s=arr(sr)[0];
+    if(!s){ toast('Чек не знайдено','err'); return; }
+    if(s.type!=='sale'){ toast('Цей чек уже повернуто','err'); renderReturnsList(); return; }
+    const items=arr(ir);
+    window.__retSale={s,items};
+    const lines=items.map(x=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)">
+      <span>${esc(x.name||'—')} × ${x.qty}</span><b>${money(num(x.price)*num(x.qty))} ₴</b></div>`).join('')
+      || `<div class="muted" style="padding:6px 0">${esc(s.item_name||'')}</div>`;
+    modal('Повернення чека',
+     `<div class="muted" style="font-size:12.5px;margin-bottom:8px">${new Date(s.created_at).toLocaleString('uk-UA')} · ${s.payment_method==='cash'?'💵 готівка':s.payment_method==='qr'?'📱 QR':'💳 картка'}</div>
+      ${lines}
+      <div style="display:flex;justify-content:space-between;margin-top:10px;font-weight:800;font-size:17px"><span>До повернення</span><span>${money(s.total)} ₴</span></div>
+      ${s.fiscal_code?`<div class="card" style="margin-top:10px;padding:10px 12px;border-color:#b8863b55;background:#fff7e8;font-size:12.5px">⚠️ Фіскальний чек №${esc(s.fiscal_code)} — повернення в ПРРО оформи в кабінеті Checkbox.</div>`:''}
+      <label class="fld" style="margin-top:14px"><span>Причина повернення (обов'язково)</span>
+        <input id="ret-reason" class="inp" placeholder="Напр.: не той напій / скарга гостя"></label>`,
+     `<button class="btn ghost" onclick="closeModal()">Відміна</button>
+      <button class="btn danger" onclick="confirmReturn('${s.id}')">↩ Повернути чек</button>`);
+  }catch(e){ reportErr(e,'Повернення'); }
+}
+async function confirmReturn(saleId){
+  const reason=$('#ret-reason').value.trim();
+  if(!reason){ toast('Вкажи причину повернення','err'); $('#ret-reason').focus(); return; }
+  const ctx=window.__retSale;
+  if(!ctx || ctx.s.id!==saleId) return;
+  if(!confirm(`Повернути чек на ${money(ctx.s.total)} ₴?\nГроші віддай гостю з каси.`)) return;
+  try{
+    const up=await SB.patch(`sales?id=eq.${saleId}`,{type:'return',return_reason:reason,
+      returned_at:new Date().toISOString(),returned_by:State.user.id});
+    if(sbErr(up)) throw up;
+    // відновити інгредієнти на склад (за поточними техкартами, по id)
+    for(const it of ctx.items){
+      if(!it.menu_item_id) continue;
+      for(const r of recipeFor(it.menu_item_id, it.variant_id||null)){
+        const g=ing(r.ingredient_id); if(!g) continue;
+        const back=round2(num(r.qty)*num(it.qty));
+        const newStock=round2(num(g.stock)+back);
+        const ug=await SB.patch(`ingredients?id=eq.${r.ingredient_id}`,{stock:newStock});
+        if(sbErr(ug)) throw ug;
+        g.stock=newStock;
+        await SB.post('stock_moves', withBranch({ingredient_id:r.ingredient_id, delta:back, reason:'return', ref_id:saleId}));
+      }
+    }
+    // лояльність: зняти нараховані за цей чек бонуси і штамп
+    if(ctx.s.customer_id){
+      const c=State.customers.find(x=>x.id===ctx.s.customer_id);
+      if(c){
+        const nb=Math.max(0, round2(num(c.bonus)-num(ctx.s.total)*0.05));
+        const ns=Math.max(0,(c.stamps||0)-1);
+        await SB.patch(`customers?id=eq.${ctx.s.customer_id}`,{bonus:nb,stamps:ns});
+        c.bonus=nb; c.stamps=ns;
+      }
+    }
+    window.__retSale=null;
+    closeModal(); toast('Чек повернуто ↩ '+money(ctx.s.total)+' ₴','ok');
+    renderReturnsList(); renderShiftBlock();
+  }catch(e){ reportErr(e,'Повернення'); }
+}
 function cashTab(type){
   window.__coType=type;
   $('#co-tab-in').classList.toggle('active',type==='in');
