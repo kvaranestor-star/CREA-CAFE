@@ -400,8 +400,24 @@ const State = {
   shift:null,            // поточна відкрита зміна
   cart:[],               // POS корзина
   checkbox:{enabled:false}, // фіскалізація ПРРО
+  q:{},                  // пошук по сторінках {menu:'', recipes:'', stock:''}
   page:'pos', posCat:'all', posCustomer:null,
 };
+/* ---------------- пошук по назві ---------------- */
+function searchInput(page, placeholder){
+  return `<input class="inp" id="q-${page}" style="max-width:230px;height:38px" placeholder="🔍 ${placeholder}"
+    value="${esc(State.q[page]||'')}" oninput="pageSearch('${page}',this.value)">`;
+}
+function pageSearch(page,val){
+  State.q[page]=val;
+  if(PAGES[page]) PAGES[page]();
+  const el=document.getElementById('q-'+page);
+  if(el){ el.focus(); try{el.setSelectionRange(el.value.length,el.value.length);}catch(_){}}
+}
+function matchQ(page,name){
+  const q=(State.q[page]||'').trim().toLowerCase();
+  return !q || String(name||'').toLowerCase().includes(q);
+}
 function withBranch(obj){ return Object.assign({branch_id:State.branchId}, obj); }
 function ing(id){ return State.ingredients.find(x=>x.id===id); }
 function item(id){ return State.items.find(x=>x.id===id); }
@@ -929,6 +945,7 @@ async function cashOp(type){
 /* ============================ PAGE: МЕНЮ ============================ */
 PAGES.menu = function(){
   $('#view').innerHTML = `<div class="page-head"><h1>Меню</h1><div class="line"></div>
+    ${searchInput('menu','Пошук позиції…')}
     <button class="btn ghost" onclick="editCategory()">+ Категорія</button>
     <button class="btn" onclick="editItem()">+ Позиція</button></div>
    <div id="menu-body"></div>`;
@@ -936,10 +953,13 @@ PAGES.menu = function(){
   if(!State.items.length && !State.categories.length){
     body.innerHTML=`<div class="empty card"><div class="em">☕</div><div>Меню порожнє. Створи категорію і додай позиції.</div></div>`; return;
   }
+  const searching=(State.q.menu||'').trim().length>0;
   const cats=[...State.categories, {id:null,name:'Без категорії'}];
+  let anyShown=false;
   body.innerHTML = cats.map(c=>{
-    const its=State.items.filter(i=> (c.id? i.category_id===c.id : !i.category_id));
-    if(!its.length && c.id===null) return '';
+    const its=State.items.filter(i=> (c.id? i.category_id===c.id : !i.category_id) && matchQ('menu',i.name));
+    if(!its.length && (c.id===null || searching)) return '';
+    anyShown=true;
     return `<div class="card" style="margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
         <h3 style="margin:0;font-size:16px">${c.emoji?esc(c.emoji)+' ':''}${esc(c.name)}</h3>
@@ -974,6 +994,7 @@ PAGES.menu = function(){
           <td class="num"><button class="btn sm ghost" onclick="editItem('${i.id}')">✎</button></td></tr>`;
       }).join('')}</tbody></table></div></div>`;
   }).join('');
+  if(searching && !anyShown) body.innerHTML=`<div class="empty card"><div class="em">🔍</div><div>Нічого не знайдено за запитом «${esc(State.q.menu)}»</div></div>`;
 };
 function editCategory(id){
   const c = id? State.categories.find(x=>x.id===id) : {name:'',emoji:'',sort:0};
@@ -1084,6 +1105,7 @@ async function reloadMenu(){
 /* ============================ PAGE: ТЕХКАРТИ ============================ */
 PAGES.recipes = function(){
   $('#view').innerHTML=`<div class="page-head"><h1>Техкарти</h1><div class="line"></div>
+    ${searchInput('recipes','Пошук позиції…')}
     <button class="btn ghost" onclick="editModifier()">+ Модифікатор</button></div>
    <div class="card" style="margin-bottom:14px"><h3 style="margin-top:0">Модифікатори</h3>
      <div id="mod-list"></div></div>
@@ -1099,12 +1121,13 @@ PAGES.recipes = function(){
   }).join('') : '<div class="muted">Модифікаторів ще немає.</div>';
   // техкарти по позиціях (+ варіанти)
   const rows=[];
-  State.items.forEach(i=>{
+  State.items.filter(i=>matchQ('recipes',i.name)).forEach(i=>{
     const vs=itemVariants(i.id);
     if(vs.length){ vs.forEach(v=>{ const rc=recipeFor(i.id,v.id); rows.push(recRow(i,v,rc)); }); }
     else { const rc=recipeFor(i.id,null); rows.push(recRow(i,null,rc)); }
   });
-  $('#rec-rows').innerHTML = rows.join('') || '<tr><td colspan="5" class="muted" style="text-align:center;padding:20px">Спочатку додай позиції меню.</td></tr>';
+  $('#rec-rows').innerHTML = rows.join('') ||
+    `<tr><td colspan="5" class="muted" style="text-align:center;padding:20px">${(State.q.recipes||'').trim()?'Нічого не знайдено':'Спочатку додай позиції меню.'}</td></tr>`;
 };
 function recRow(i,v,rc){
   const cnt = v? recipeFor(i.id,v.id).length : recipeFor(i.id,null).length;
@@ -1178,18 +1201,20 @@ async function saveModifier(id){
 /* ============================ PAGE: ІНГРЕДІЄНТИ / СКЛАД ============================ */
 PAGES.stock = function(){
   const low=State.ingredients.filter(g=>num(g.stock)<=num(g.min_stock) && num(g.min_stock)>0);
+  const list=State.ingredients.filter(g=>matchQ('stock',g.name));
   $('#view').innerHTML=`<div class="page-head"><h1>Склад</h1><div class="line"></div>
+    ${searchInput('stock','Пошук інгредієнта…')}
     <button class="btn" onclick="editIng()">+ Інгредієнт</button></div>
     ${low.length?`<div class="card" style="margin-bottom:14px;border-color:#b8863b55;background:#fff7e8">⚠️ Мало на складі: ${low.map(g=>esc(g.name)).join(', ')}</div>`:''}
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Інгредієнт</th><th>Категорія</th><th class="num">Залишок</th><th class="num">Собівартість</th><th class="num">Сума</th><th></th></tr></thead>
-    <tbody>${State.ingredients.length? State.ingredients.map(g=>{
+    <tbody>${list.length? list.map(g=>{
       const lowc=num(g.stock)<=num(g.min_stock)&&num(g.min_stock)>0;
       return `<tr><td style="font-size:18px">${g.emoji?esc(g.emoji):'📦'}</td>
         <td><b>${esc(g.name)}</b></td><td>${esc(g.category||'')}</td>
         <td class="num" style="${lowc?'color:var(--danger);font-weight:700':''}">${money(g.stock)} ${UNITS[g.unit]||''}${lowc?' ⚠️':''}</td>
         <td class="num">${money(g.cost)} ₴</td><td class="num">${money(num(g.stock)*num(g.cost))} ₴</td>
         <td class="num"><button class="btn sm ghost" onclick="editIng('${g.id}')">✎</button></td></tr>`;
-    }).join('') : '<tr><td colspan="7" class="muted" style="text-align:center;padding:20px">Інгредієнтів ще немає</td></tr>'}</tbody></table></div>`;
+    }).join('') : `<tr><td colspan="7" class="muted" style="text-align:center;padding:20px">${(State.q.stock||'').trim()?'Нічого не знайдено':'Інгредієнтів ще немає'}</td></tr>`}</tbody></table></div>`;
 };
 function editIng(id){
   const g = id? ing(id) : {name:'',unit:'g',stock:0,cost:0,min_stock:0,category:'',emoji:''};
