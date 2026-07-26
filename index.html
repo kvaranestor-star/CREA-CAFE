@@ -1416,7 +1416,14 @@ PAGES.delivery = function(){
   $('#view').innerHTML=`<div class="page-head"><h1>Прихід від постачальника</h1><div class="line"></div>
      <button class="btn ghost" onclick="editSupplier()">+ Постачальник</button></div>
    <div class="card" style="margin-bottom:16px">
-     <div class="row"><label class="fld"><span>Постачальник</span><select id="d-sup" class="inp">${supOpts}</select></label>
+     <div class="row">
+       <label class="fld"><span>Постачальник</span>
+         <select id="d-sup" class="inp">${supOpts}</select>
+         <div style="display:flex;gap:8px;margin-top:8px">
+           <input id="d-sup-new" class="inp" placeholder="Або введи нового і натисни +" onkeydown="if(event.key==='Enter'){event.preventDefault();addSupplierInline();}">
+           <button type="button" class="btn" style="flex:0 0 52px;font-size:22px;padding:0" onclick="addSupplierInline()">+</button>
+         </div>
+       </label>
        <label class="fld"><span>Коментар</span><input id="d-note" class="inp"></label></div>
      <div style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:6px 0">Позиції накладної</div>
      <div id="del-rows" style="display:flex;flex-direction:column;gap:6px"></div>
@@ -1466,6 +1473,22 @@ async function renderDeliveries(){
   const sup=id=>State.suppliers.find(s=>s.id===id)?.name||'—';
   box.innerHTML=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Постачальник</th><th>Коментар</th><th class="num">Сума</th></tr></thead>
    <tbody>${arr(r).map(d=>`<tr><td>${new Date(d.created_at).toLocaleString('uk-UA')}</td><td>${esc(sup(d.supplier_id))}</td><td>${esc(d.note||'')}</td><td class="num"><b>${money(d.total)} ₴</b></td></tr>`).join('')||'<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">Приходів ще немає</td></tr>'}</tbody></table></div>`;
+}
+async function addSupplierInline(){
+  const inp=$('#d-sup-new'); const name=inp.value.trim();
+  if(!name){ toast('Введи назву постачальника','err'); inp.focus(); return; }
+  const ex=State.suppliers.find(s=>(s.name||'').toLowerCase()===name.toLowerCase());
+  if(ex){ $('#d-sup').value=ex.id; inp.value=''; toast('Такий постачальник вже є — обрано його','ok'); return; }
+  try{
+    const r=await SB.post('suppliers', withBranch({name})); if(sbErr(r)) throw r;
+    const s=Array.isArray(r)?r[0]:r;
+    State.suppliers.push(s);
+    State.suppliers.sort((a,b)=>(a.name||'').localeCompare(b.name||'','uk'));
+    const sel=$('#d-sup');
+    sel.innerHTML=`<option value="">— оберіть —</option>`+State.suppliers.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');
+    sel.value=s.id; inp.value='';
+    toast('Постачальника «'+name+'» додано ✓','ok');
+  }catch(e){ reportErr(e,'Постачальник'); }
 }
 function editSupplier(id){
   const s=id?State.suppliers.find(x=>x.id===id):{name:'',phone:'',note:''};
