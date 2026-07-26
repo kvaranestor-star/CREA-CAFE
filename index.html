@@ -918,6 +918,10 @@ function cashTab(type){
   const b=$('#co-btn');
   b.textContent = type==='in'? 'Внести' : 'Винести';
   b.className = 'btn co-btn' + (type==='out'?' danger':'');
+  const note=$('#co-note');
+  if(note){ note.placeholder = type==='out'? 'Причина (обов\'язково)' : '(опц.)'; }
+  const noteLbl=note && note.closest('label')?.querySelector('span');
+  if(noteLbl) noteLbl.textContent = type==='out'? 'Причина' : 'Коментар';
 }
 async function renderCashList(){
   const box=$('#cash-list'); if(!box)return;
@@ -934,6 +938,26 @@ async function cashOp(type){
   const amt=round2(num($('#co-amt').value));
   const note=$('#co-note').value.trim();
   if(amt<=0){ toast('Вкажи суму','err'); return; }
+  if(type==='out'){
+    // 1) причина виносу обов'язкова
+    if(!note){ toast('Вкажи причину виносу в полі «Причина»','err'); $('#co-note').focus(); return; }
+    // 2) не можна винести більше, ніж є готівки в касі
+    if(!State.shift){ toast('Винос можливий лише при відкритій зміні (каса не порахована)','err'); return; }
+    try{
+      const [salesR,opsR]=await Promise.all([
+        SB.get(`sales?select=total,payment_method,type&shift_id=eq.${State.shift.id}`),
+        SB.get(`cash_ops?select=type,amount&shift_id=eq.${State.shift.id}`),
+      ]);
+      const cashSales=arr(salesR).filter(s=>s.type==='sale'&&s.payment_method==='cash').reduce((a,b)=>a+num(b.total),0);
+      const cashIn =arr(opsR).filter(o=>o.type==='in').reduce((a,b)=>a+num(b.amount),0);
+      const cashOut=arr(opsR).filter(o=>o.type==='out').reduce((a,b)=>a+num(b.amount),0);
+      const available=round2(num(State.shift.cash_start)+cashSales+cashIn-cashOut);
+      if(amt>available){
+        toast(`У касі лише ${money(available)} ₴ готівки — винести ${money(amt)} ₴ не можна`,'err');
+        return;
+      }
+    }catch(e){ reportErr(e,'Перевірка каси'); return; }
+  }
   try{
     const r=await SB.post('cash_ops', withBranch({shift_id:State.shift?State.shift.id:null,type,category:cat,amount:amt,note,created_by:State.user.id}));
     if(sbErr(r)) throw r;
