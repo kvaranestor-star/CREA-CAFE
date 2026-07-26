@@ -946,15 +946,31 @@ PAGES.menu = function(){
         ${c.id?`<button class="btn sm ghost" onclick="editCategory('${c.id}')">✎</button>`:''}
         <div style="flex:1"></div><span class="muted" style="font-size:12px">${its.length} поз.</span></div>
       <div class="tbl-wrap" style="border:none">
-      <table class="tbl"><thead><tr><th></th><th>Назва</th><th>Ціна / розміри</th><th>Собівартість</th><th>Модиф.</th><th></th></tr></thead>
+      <table class="tbl"><thead><tr>
+        <th style="width:44px"></th><th>Назва</th><th>Ціна / розміри</th>
+        <th class="num">Собівартість</th><th>Націнка</th>
+        <th class="num" style="width:70px">Модиф.</th><th style="width:64px"></th></tr></thead>
       <tbody>${its.map(i=>{
         const vs=itemVariants(i.id); const mods=itemModifiers(i.id);
-        const price = vs.length? vs.map(v=>`${esc(v.name)} ${money(v.price)}`).join(' · ') : money(i.price)+' ₴';
-        const baseCost = vs.length? recipeCost(i.id, vs[0].id) : recipeCost(i.id,null);
+        const priceStr = vs.length? vs.map(v=>`${esc(v.name)} ${money(v.price)}`).join(' · ') : money(i.price)+' ₴';
+        // рахуємо по найдешевшому розміру (або базовій ціні)
+        let price, baseCost;
+        if(vs.length){ const vmin=vs.reduce((a,b)=>num(b.price)<num(a.price)?b:a,vs[0]);
+          price=num(vmin.price); baseCost=recipeCost(i.id,vmin.id); }
+        else { price=num(i.price); baseCost=recipeCost(i.id,null); }
+        const margin=round2(price-baseCost);
+        const markup = baseCost>0? Math.round(margin/baseCost*100) : null;
+        const marginHtml = baseCost<=0
+          ? '<span class="tag" title="Заповни техкарту, щоб бачити собівартість">без техкарти</span>'
+          : margin<0  ? `<span class="tag danger">⚠ ЗБИТОК ${money(margin)} ₴</span>`
+          : margin===0? `<span class="tag danger">в нуль</span>`
+          : `<span class="tag ok">+${money(margin)} ₴ · ${markup}%</span>`;
         return `<tr><td style="font-size:20px">${i.emoji?esc(i.emoji):'☕'}</td>
           <td><b>${esc(i.name)}</b> ${i.is_active===false?'<span class="tag danger">off</span>':''}</td>
-          <td>${price}</td><td class="num">${money(baseCost)} ₴</td>
-          <td>${mods.length?mods.length:'—'}</td>
+          <td>${priceStr}</td>
+          <td class="num">${baseCost>0? money(baseCost)+' ₴' : '—'}</td>
+          <td>${marginHtml}</td>
+          <td class="num">${mods.length?mods.length:'—'}</td>
           <td class="num"><button class="btn sm ghost" onclick="editItem('${i.id}')">✎</button></td></tr>`;
       }).join('')}</tbody></table></div></div>`;
   }).join('');
