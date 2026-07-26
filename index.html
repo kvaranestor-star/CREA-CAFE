@@ -560,28 +560,32 @@ PAGES.pos = function(){
       <div class="pr">${vs.length?'від ':''}${money(pr)} ₴</div></div></button>`;
   }).join('') : `<div class="empty" style="grid-column:1/-1"><div class="em">☕</div><div>Меню порожнє. Додай позиції у розділі «Меню».</div></div>`;
 
+  if(!State.posTab) State.posTab = State.shift ? 'sale' : 'shift';
   $('#view').innerHTML = `
   <div class="page-head"><h1>Каса</h1><div class="line"></div>
-    ${State.shift?`<span class="muted" style="font-size:12.5px">зміна з ${new Date(State.shift.opened_at).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})}</span>
-      <button class="btn ghost" onclick="closeShiftModal()">🔒 Закрити зміну</button>`:''}</div>
-  ${State.shift?'':`<div class="card" style="margin-bottom:16px;max-width:520px">
-    <h3 style="margin-top:0">🔓 Відкрити зміну</h3>
-    <div class="row" style="align-items:flex-end;gap:10px">
-      <label class="fld" style="margin-bottom:0"><span>Готівка в касі на початок, ₴</span>
-        <input id="sh-start" class="inp" type="number" step="0.01" value="0"></label>
-      <button class="btn" style="flex:0 0 160px" onclick="openShift()">Відкрити зміну</button>
-    </div>
-    <div class="muted" style="font-size:12.5px;margin-top:10px">Продаж заблоковано, поки зміна закрита.</div>
-  </div>`}
-  <div class="pos">
-    <div>
-      <div class="cats">${catChips}</div>
-      <div class="menu-grid">${tiles}</div>
-    </div>
-    <div class="card cart" id="cart"></div>
-  </div>`;
-  renderCart();
+    <span class="muted" style="font-size:12.5px">${State.shift?('зміна з '+new Date(State.shift.opened_at).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})):'зміна закрита'}</span></div>
+  <div class="cats" style="margin-bottom:16px">
+    <button class="chip ${State.posTab==='sale'?'active':''}" onclick="posTab('sale')">🧾 Продаж</button>
+    <button class="chip ${State.posTab==='shift'?'active':''}" onclick="posTab('shift')">${State.shift?'🟢':'🔴'} Зміна</button>
+  </div>
+  <div id="pos-body"></div>`;
+  if(State.posTab==='sale') renderSaleTab(catChips, tiles); else renderShiftTab();
 };
+function posTab(t){ State.posTab=t; PAGES.pos(); }
+function renderSaleTab(catChips, tiles){
+  $('#pos-body').innerHTML = `
+   ${State.shift?'':`<div class="card" style="margin-bottom:14px;padding:11px 16px;border-color:#b8863b55;background:#fff7e8;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between">
+      <span>⚠️ Зміна закрита — продаж заблоковано.</span>
+      <button class="btn sm" onclick="posTab('shift')">🔓 Відкрити зміну</button></div>`}
+   <div class="pos">
+     <div>
+       <div class="cats">${catChips}</div>
+       <div class="menu-grid">${tiles}</div>
+     </div>
+     <div class="card cart" id="cart"></div>
+   </div>`;
+  renderCart();
+}
 function posSetCat(c){ State.posCat=c; PAGES.pos(); }
 function posPick(itemId){
   const it=item(itemId); if(!it) return;
@@ -757,10 +761,23 @@ async function addCustomerFromPOS(){
   }catch(e){ reportErr(e,'Клієнт'); }
 }
 
-/* ============================ ЗМІНА (модалка на сторінці каси) ============================ */
-async function closeShiftModal(){
-  const s=State.shift; if(!s) return;
-  modal('Закриття зміни (Z-звіт)','<div class="muted">Рахую зведення…</div>','');
+/* ============================ ВКЛАДКА «ЗМІНА» (у пункті Каса) ============================ */
+async function renderShiftTab(){
+  const box=$('#pos-body'); if(!box) return;
+  if(!State.shift){
+    box.innerHTML = `<div style="display:flex;justify-content:center;padding:26px 0">
+      <div class="card" style="max-width:440px;width:100%;text-align:center;padding:34px 28px">
+        <div style="font-size:44px">🔓</div>
+        <h3 style="margin:12px 0 6px;font-size:18px">Відкрити зміну</h3>
+        <div class="muted" style="font-size:13px;margin-bottom:20px">Вкажи готівку в касі на початок дня.<br>Продаж стане доступним після відкриття.</div>
+        <label class="fld" style="text-align:left"><span>Готівка на початок, ₴</span>
+          <input id="sh-start" class="inp" type="number" step="0.01" value="0"></label>
+        <button class="btn block" onclick="openShift()">Відкрити зміну</button>
+      </div></div>`;
+    return;
+  }
+  const s=State.shift;
+  box.innerHTML='<div class="card" style="max-width:440px;margin:0 auto"><div class="muted">Рахую зведення зміни…</div></div>';
   try{
     const [sales, ops] = await Promise.all([
       SB.get(`sales?select=*&shift_id=eq.${s.id}`),
@@ -776,21 +793,25 @@ async function closeShiftModal(){
     const cashOut= O.filter(x=>x.type==='out').reduce((a,b)=>a+num(b.amount),0);
     const expectedCash = round2(num(s.cash_start)+cashSales+cashIn-cashOut);
     const avg = sale.length? rev/sale.length : 0;
-    const line=(k,v)=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)"><span class="muted">${k}</span><b>${v}</b></div>`;
-    modal('Закриття зміни (Z-звіт)',
-     `<div class="muted" style="font-size:12.5px;margin-bottom:8px">Відкрита: ${new Date(s.opened_at).toLocaleString('uk-UA')}</div>
-      ${line('Виручка', money(rev)+' ₴ · '+sale.length+' чеків')}
-      ${line('Середній чек', money(avg)+' ₴')}
-      ${line('💵 Готівка', money(cashSales)+' ₴')}
-      ${line('💳 Картка', money(cardSales)+' ₴')}
-      ${line('📱 QR', money(qrSales)+' ₴')}
-      ${line('Внесення / Винесення', '+'+money(cashIn)+' / −'+money(cashOut)+' ₴')}
-      ${line('Готівка в касі (розрахунково)', money(expectedCash)+' ₴')}
-      <label class="fld" style="margin-top:14px"><span>Фактична готівка в касі, ₴</span>
-        <input id="sh-end" class="inp" type="number" step="0.01" value="${round2(expectedCash)}"></label>`,
-     `<button class="btn ghost" onclick="closeModal()">Відміна</button>
-      <button class="btn" onclick="closeShift(${expectedCash})">🔒 Закрити зміну</button>`);
-  }catch(e){ closeModal(); reportErr(e,'Зведення зміни'); }
+    box.innerHTML = `
+     <div class="kpis" style="margin-bottom:16px">
+       <div class="kpi"><div class="k">Виручка</div><div class="v">${money(rev)} ₴</div><div class="s">${sale.length} чеків · сер. ${money(avg)} ₴</div></div>
+       <div class="kpi"><div class="k">💵 Готівка</div><div class="v">${money(cashSales)} ₴</div></div>
+       <div class="kpi"><div class="k">💳 Картка</div><div class="v">${money(cardSales)} ₴</div></div>
+       <div class="kpi"><div class="k">📱 QR</div><div class="v">${money(qrSales)} ₴</div></div>
+       <div class="kpi"><div class="k">Готівка в касі (розрах.)</div><div class="v">${money(expectedCash)} ₴</div>
+         <div class="s">старт ${money(s.cash_start)} · внес. +${money(cashIn)} · винос. −${money(cashOut)}</div></div>
+     </div>
+     <div class="card" style="max-width:460px">
+       <h3 style="margin-top:0">🔒 Закрити зміну (Z-звіт)</h3>
+       <div class="muted" style="font-size:13px;margin-bottom:12px">Відкрита: ${new Date(s.opened_at).toLocaleString('uk-UA')}</div>
+       <div class="row" style="align-items:flex-end;gap:10px">
+         <label class="fld" style="margin-bottom:0"><span>Фактична готівка в касі, ₴</span>
+           <input id="sh-end" class="inp" type="number" step="0.01" value="${round2(expectedCash)}"></label>
+         <button class="btn co-btn" onclick="closeShift(${expectedCash})">Закрити зміну</button>
+       </div>
+     </div>`;
+  }catch(e){ box.innerHTML='<div class="card">Помилка зведення. Спробуй ще раз.</div>'; reportErr(e,'Зведення зміни'); }
 }
 async function openShift(){
   // 1) власник ще ВЗАГАЛІ не зберігав налаштування фіскалізації — зміну не відкриваємо
@@ -817,6 +838,7 @@ async function openShift(){
         toast('Зміну ПРРО відкрито','ok');
       }catch(ce){ reportErr(ce,'Checkbox зміна'); toast('Локальну зміну відкрито, ПРРО — ні','err'); }
     }
+    State.posTab='sale';
     refreshTopbar(); toast('Зміну відкрито','ok'); go('pos');
   }catch(e){ reportErr(e,'Відкриття зміни'); }
 }
@@ -831,7 +853,7 @@ async function closeShift(expected){
     }
     const r=await SB.patch(`shifts?id=eq.${State.shift.id}`,{status:'closed', closed_at:new Date().toISOString(), closed_by:State.user.id, cash_end:end});
     if(sbErr(r)) throw r;
-    State.shift=null; closeModal(); refreshTopbar(); toast('Зміну закрито','ok'); go('reports');
+    State.shift=null; State.posTab='shift'; closeModal(); refreshTopbar(); toast('Зміну закрито','ok'); go('reports');
   }catch(e){ reportErr(e,'Закриття зміни'); }
 }
 
