@@ -489,12 +489,15 @@ async function loadAll(){
 function arr(x){ return Array.isArray(x)?x:[]; }
 async function loadSettings(){
   try{
-    const r = await SB.get(`app_settings?select=*&branch_id=eq.${State.branchId}&key=eq.checkbox&limit=1`);
-    const row = arr(r)[0];
-    State.checkbox = (row && row.value) ? row.value : {enabled:false};
-    State.cbSaved = !!(row && row.value);   // чи власник взагалі зберігав налаштування
-  }catch(e){ State.checkbox = {enabled:false}; State.cbSaved = false; }  // таблиці ще нема — не падаємо
+    const r = await SB.get(`app_settings?select=*&branch_id=eq.${State.branchId}&key=in.(checkbox,monobank)`);
+    const rows=arr(r);
+    const cb=rows.find(x=>x.key==='checkbox'), mb=rows.find(x=>x.key==='monobank');
+    State.checkbox = (cb && cb.value) ? cb.value : {enabled:false};
+    State.cbSaved = !!(cb && cb.value);   // чи власник взагалі зберігав налаштування
+    State.monobank = (mb && mb.value) ? mb.value : {qr_enabled:true};
+  }catch(e){ State.checkbox = {enabled:false}; State.cbSaved = false; State.monobank={qr_enabled:true}; }  // таблиці ще нема — не падаємо
 }
+function qrEnabled(){ return !(State.monobank && State.monobank.qr_enabled===false); }
 function cbEnabled(){ return !!(State.checkbox && State.checkbox.enabled); }
 // які види оплати фіскалізувати. Поки власник не обрав — жодного.
 function cbPay(){ const p=State.checkbox&&State.checkbox.pay; return p||{cash:false,card:false,qr:false}; }
@@ -534,7 +537,7 @@ async function syncData(){
   try{
     const key=()=>JSON.stringify([State.ingredients,State.categories,State.items,State.variants,
       State.modifiers,State.itemMods,State.recipes,State.suppliers,State.customers,State.users,
-      State.shift,State.checkbox]);
+      State.shift,State.checkbox,State.monobank]);
     const before=key();
     await loadAll();
     if(key()!==before){
@@ -724,7 +727,7 @@ function renderCart(){
     <div class="pay-btns">
       <button class="btn" ${State.shift?'':'disabled'} onclick="checkout('cash')">💵 Готівка</button>
       <button class="btn" ${State.shift?'':'disabled'} onclick="checkout('card')">💳 Картка</button>
-      ${CONFIG.MONOBANK_QR?`<button class="btn warm" ${State.shift?'':'disabled'} onclick="checkout('qr')">📱 QR</button>`:''}
+      ${qrEnabled()?`<button class="btn warm" ${State.shift?'':'disabled'} onclick="checkout('qr')">📱 QR</button>`:''}
     </div>`;
 }
 function cartQty(idx,d){ const l=State.cart[idx]; if(!l)return; l.qty+=d; if(l.qty<=0) State.cart.splice(idx,1); renderCart(); }
@@ -1490,8 +1493,7 @@ async function saveIng(id){
 /* ============================ PAGE: ПРИХІД ============================ */
 PAGES.delivery = function(){
   const supOpts=`<option value="">— оберіть —</option>`+State.suppliers.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
-  $('#view').innerHTML=`<div class="page-head"><h1>Прихід від постачальника</h1><div class="line"></div>
-     <button class="btn ghost" onclick="editSupplier()">+ Постачальник</button></div>
+  $('#view').innerHTML=`<div class="page-head"><h1>Прихід від постачальника</h1><div class="line"></div></div>
    <div class="card" style="margin-bottom:16px">
      <div class="row">
        <label class="fld"><span>Постачальник</span>
@@ -1784,10 +1786,26 @@ PAGES.settings = function(){
    </div>
    <div class="card">
      <h3 style="margin-top:0">QR / Monobank Acquiring</h3>
-     <div class="muted" style="font-size:13px">Кнопка QR у касі ${CONFIG.MONOBANK_QR?'<b>увімкнена</b>':'вимкнена'}. Для реальної оплати додай <code>api/monobank.js</code> і токен мерчанта (див. інструкцію у файлі DEPLOY).</div>
+     <label style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line-2);border-radius:12px;cursor:pointer;margin-bottom:12px;background:#fff">
+       <input type="checkbox" id="mb-qr" ${qrEnabled()?'checked':''} style="width:20px;height:20px;accent-color:var(--anthracite)">
+       <div><b>Кнопка «📱 QR» у касі</b>
+       <div class="muted" style="font-size:12.5px">Вимкнеш — на екрані продажу залишаться лише Готівка і Картка.</div></div>
+     </label>
+     <button class="btn sm" onclick="saveMonobank()">Зберегти</button>
+     <div class="muted" style="font-size:12px;margin-top:10px">Для реальної оплати через Monobank: файл <code>api/monobank.js</code> у репозиторії + токен <code>MONO_TOKEN</code> у Vercel → Environment Variables. Без токена кнопка працює в демо-режимі (чек проводиться, банк не викликається).</div>
    </div>`;
   renderMenuQR();
 };
+async function saveMonobank(){
+  const cfg={qr_enabled: $('#mb-qr').checked};
+  try{
+    const existing = arr(await SB.get(`app_settings?select=id&branch_id=eq.${State.branchId}&key=eq.monobank&limit=1`))[0];
+    if(existing){ const r=await SB.patch(`app_settings?id=eq.${existing.id}`,{value:cfg,updated_at:new Date().toISOString()}); if(sbErr(r))throw r; }
+    else { const r=await SB.post('app_settings', withBranch({key:'monobank',value:cfg})); if(sbErr(r))throw r; }
+    State.monobank=cfg;
+    toast(cfg.qr_enabled?'Кнопку QR увімкнено':'Кнопку QR вимкнено','ok');
+  }catch(e){ reportErr(e,'Налаштування QR'); }
+}
 function menuUrl(){
   return location.origin && location.origin.startsWith('http')
     ? location.origin + '/menu.html'
