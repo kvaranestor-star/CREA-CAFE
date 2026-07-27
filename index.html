@@ -1525,17 +1525,20 @@ async function saveDelivery(){
     const dRes=await SB.post('deliveries',withBranch({supplier_id:$('#d-sup').value||null,total,note:$('#d-note').value.trim(),created_by:State.user.id}));
     if(sbErr(dRes))throw dRes; const del=Array.isArray(dRes)?dRes[0]:dRes;
     const di=await SB.post('delivery_items',rows.map(r=>({delivery_id:del.id,...r}))); if(sbErr(di))throw di;
-    // оновлення залишків + середньозважена собівартість
+    // оновлення залишків + собівартість = ціна ОСТАННЬОГО приходу
+    const updated=[];
     for(const r of rows){
       const g=ing(r.ingredient_id); if(!g)continue;
-      const oldStock=num(g.stock),oldCost=num(g.cost);
-      const newStock=round2(oldStock+r.qty);
-      const newCost = newStock>0? round2((oldStock*oldCost + r.qty*r.unit_cost)/newStock) : r.unit_cost;
+      const newStock=round2(num(g.stock)+r.qty);
+      const newCost = r.unit_cost>0 ? round2(r.unit_cost) : num(g.cost);  // ціна/од з накладної
       const up=await SB.patch(`ingredients?id=eq.${r.ingredient_id}`,{stock:newStock,cost:newCost}); if(sbErr(up))throw up;
+      if(round2(num(g.cost))!==newCost) updated.push(`${g.name}: ${money(g.cost)} → ${money(newCost)} ₴`);
       g.stock=newStock; g.cost=newCost;
       await SB.post('stock_moves',withBranch({ingredient_id:r.ingredient_id,delta:r.qty,reason:'income',ref_id:del.id}));
     }
-    toast('Прихід проведено ✓','ok'); PAGES.delivery();
+    toast('Прихід проведено ✓ Собівартість оновлено'+(updated.length?' ('+updated.length+' поз.)':''),'ok');
+    if(updated.length) console.log('Оновлені собівартості:', updated.join('; '));
+    PAGES.delivery();
   }catch(e){ reportErr(e,'Прихід'); }
 }
 async function renderDeliveries(){
