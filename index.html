@@ -200,7 +200,7 @@ select.inp{appearance:none;-webkit-appearance:none;
 .qtybox button{width:30px;height:30px;border:none;background:#fff;font-size:16px;font-weight:700}
 .qtybox button:hover{background:#2b2b2e0d}
 .qtybox span{min-width:30px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
-.pay-btns{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:6px}
+.pay-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
 .empty{padding:34px 16px;text-align:center;color:var(--muted)}
 .empty .em{font-size:34px;opacity:.5}
 
@@ -337,7 +337,6 @@ body.kiosk #kiosk-tools{display:flex}
 const CONFIG = {
   SUPABASE_URL:      'https://podbkulmoqlmpenymnms.supabase.co',
   SUPABASE_ANON_KEY: 'sb_publishable_HXD6eqN5g3j6ExUD-jUYgg_t1xnbZoh',
-  MONOBANK_QR:       true,   // показувати кнопку QR-оплати (потрібна api/monobank.js + токен)
 };
 
 /* ---------------- helpers ---------------- */
@@ -489,19 +488,16 @@ async function loadAll(){
 function arr(x){ return Array.isArray(x)?x:[]; }
 async function loadSettings(){
   try{
-    const r = await SB.get(`app_settings?select=*&branch_id=eq.${State.branchId}&key=in.(checkbox,monobank)`);
-    const rows=arr(r);
-    const cb=rows.find(x=>x.key==='checkbox'), mb=rows.find(x=>x.key==='monobank');
+    const r = await SB.get(`app_settings?select=*&branch_id=eq.${State.branchId}&key=eq.checkbox&limit=1`);
+    const cb=arr(r)[0];
     State.checkbox = (cb && cb.value) ? cb.value : {enabled:false};
     State.cbSaved = !!(cb && cb.value);   // чи власник взагалі зберігав налаштування
-    State.monobank = (mb && mb.value) ? mb.value : {qr_enabled:true};
-  }catch(e){ State.checkbox = {enabled:false}; State.cbSaved = false; State.monobank={qr_enabled:true}; }  // таблиці ще нема — не падаємо
+  }catch(e){ State.checkbox = {enabled:false}; State.cbSaved = false; }  // таблиці ще нема — не падаємо
 }
-function qrEnabled(){ return !(State.monobank && State.monobank.qr_enabled===false); }
 function cbEnabled(){ return !!(State.checkbox && State.checkbox.enabled); }
 // які види оплати фіскалізувати. Поки власник не обрав — жодного.
-function cbPay(){ const p=State.checkbox&&State.checkbox.pay; return p||{cash:false,card:false,qr:false}; }
-function cbAnyPay(){ const p=cbPay(); return !!(p.cash||p.card||p.qr); }
+function cbPay(){ const p=State.checkbox&&State.checkbox.pay; return p||{cash:false,card:false}; }
+function cbAnyPay(){ const p=cbPay(); return !!(p.cash||p.card); }
 function cbFiscalize(method){ return cbEnabled() && !!cbPay()[method]; }
 
 /* ---------------- Checkbox (ПРРО) client ---------------- */
@@ -537,7 +533,7 @@ async function syncData(){
   try{
     const key=()=>JSON.stringify([State.ingredients,State.categories,State.items,State.variants,
       State.modifiers,State.itemMods,State.recipes,State.suppliers,State.customers,State.users,
-      State.shift,State.checkbox,State.monobank]);
+      State.shift,State.checkbox]);
     const before=key();
     await loadAll();
     if(key()!==before){
@@ -727,7 +723,6 @@ function renderCart(){
     <div class="pay-btns">
       <button class="btn" ${State.shift?'':'disabled'} onclick="checkout('cash')">💵 Готівка</button>
       <button class="btn" ${State.shift?'':'disabled'} onclick="checkout('card')">💳 Картка</button>
-      ${qrEnabled()?`<button class="btn warm" ${State.shift?'':'disabled'} onclick="checkout('qr')">📱 QR</button>`:''}
     </div>`;
 }
 function cartQty(idx,d){ const l=State.cart[idx]; if(!l)return; l.qty+=d; if(l.qty<=0) State.cart.splice(idx,1); renderCart(); }
@@ -796,8 +791,7 @@ async function checkout(method){
       }catch(fe){ reportErr(fe,'Checkbox'); toast('Чек збережено, але БЕЗ фіскалізації','err'); }
     } else {
       // цей вид оплати не фіскалізується (або ПРРО вимкнено)
-      if(method==='qr') toast('Згенеруй QR у терміналі / Monobank. Чек проведено.','ok');
-      else toast('Чек проведено ✓ '+money(total)+' ₴','ok');
+      toast('Чек проведено ✓ '+money(total)+' ₴','ok');
     }
     State.cart=[]; State.posCustomer=null;
     renderCart();
@@ -857,8 +851,7 @@ async function renderShiftBlock(){
     const sale = S.filter(x=>x.type==='sale');
     const cashSales = sale.filter(x=>x.payment_method==='cash').reduce((a,b)=>a+num(b.total),0);
     const cardSales = sale.filter(x=>x.payment_method==='card').reduce((a,b)=>a+num(b.total),0);
-    const qrSales   = sale.filter(x=>x.payment_method==='qr').reduce((a,b)=>a+num(b.total),0);
-    const rev = cashSales+cardSales+qrSales;
+    const rev = sale.reduce((a,b)=>a+num(b.total),0);
     const cashIn = O.filter(x=>x.type==='in').reduce((a,b)=>a+num(b.amount),0);
     const cashOut= O.filter(x=>x.type==='out').reduce((a,b)=>a+num(b.amount),0);
     const expectedCash = round2(num(s.cash_start)+cashSales+cashIn-cashOut);
@@ -868,7 +861,6 @@ async function renderShiftBlock(){
        <div class="kpi"><div class="k">Виручка</div><div class="v">${money(rev)} ₴</div><div class="s">${sale.length} чеків · сер. ${money(avg)} ₴</div></div>
        <div class="kpi"><div class="k">💵 Готівка</div><div class="v">${money(cashSales)} ₴</div></div>
        <div class="kpi"><div class="k">💳 Картка</div><div class="v">${money(cardSales)} ₴</div></div>
-       <div class="kpi"><div class="k">📱 QR</div><div class="v">${money(qrSales)} ₴</div></div>
        <div class="kpi"><div class="k">Готівка в касі (розрах.)</div><div class="v">${money(expectedCash)} ₴</div>
          <div class="s">старт ${money(s.cash_start)} · внес. +${money(cashIn)} · винос. −${money(cashOut)}</div></div>
      </div>
@@ -887,14 +879,14 @@ async function openShift(){
   // 1) власник ще ВЗАГАЛІ не зберігав налаштування фіскалізації — зміну не відкриваємо
   if(!State.cbSaved){
     toast('Спочатку налаштуй фіскалізацію (Налаштування → Checkbox)','err');
-    alert('Перед першою зміною власник має зайти в Налаштування → Checkbox і зберегти вибір:\n\n• увімкнути фіскалізацію й позначити, які види оплати фіскалізувати (готівка / картка / QR),\n• або свідомо зберегти з ВИМКНЕНОЮ фіскалізацією (робота без ПРРО).\n\nБез цього відкрити зміну не можна.'+(State.user.role==='barista'?'\n\nЗвернись до власника.':''));
+    alert('Перед першою зміною власник має зайти в Налаштування → Checkbox і зберегти вибір:\n\n• увімкнути фіскалізацію й позначити, які види оплати фіскалізувати (готівка / картка),\n• або свідомо зберегти з ВИМКНЕНОЮ фіскалізацією (робота без ПРРО).\n\nБез цього відкрити зміну не можна.'+(State.user.role==='barista'?'\n\nЗвернись до власника.':''));
     if(State.user.role!=='barista') go('settings');
     return;
   }
   // 2) фіскалізацію увімкнено, але не обрано жодного виду оплати — теж блок
   if(cbEnabled() && !cbAnyPay()){
     toast('Оберіть хоча б один вид оплати для фіскалізації (Налаштування → Checkbox)','err');
-    alert('Фіскалізацію Checkbox увімкнено, але не обрано жодного виду оплати.\n\nЗайдіть у Налаштування → Checkbox і позначте, які оплати фіскалізувати (готівка / картка / QR), або вимкніть фіскалізацію. Без цього відкрити зміну не можна.');
+    alert('Фіскалізацію Checkbox увімкнено, але не обрано жодного виду оплати.\n\nЗайдіть у Налаштування → Checkbox і позначте, які оплати фіскалізувати (готівка / картка), або вимкніть фіскалізацію. Без цього відкрити зміну не можна.');
     if(State.user.role!=='barista') go('settings');
     return;
   }
@@ -960,7 +952,7 @@ async function renderReturnsList(){
     const rows=arr(r).map(s=>`<tr>
       <td>${new Date(s.created_at).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})}</td>
       <td>${esc(s.item_name||'—')}</td>
-      <td>${s.payment_method==='cash'?'💵':s.payment_method==='qr'?'📱':'💳'}</td>
+      <td>${s.payment_method==='cash'?'💵':'💳'}</td>
       <td class="num"><b>${money(s.total)} ₴</b></td>
       <td class="num"><button class="btn sm danger" onclick="openReturn('${s.id}')">↩ Повернути</button></td></tr>`).join('');
     box.innerHTML=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Час</th><th>Чек</th><th></th><th class="num">Сума</th><th style="width:130px"></th></tr></thead>
@@ -982,7 +974,7 @@ async function openReturn(saleId){
       <span>${esc(x.name||'—')} × ${x.qty}</span><b>${money(num(x.price)*num(x.qty))} ₴</b></div>`).join('')
       || `<div class="muted" style="padding:6px 0">${esc(s.item_name||'')}</div>`;
     modal('Повернення чека',
-     `<div class="muted" style="font-size:12.5px;margin-bottom:8px">${new Date(s.created_at).toLocaleString('uk-UA')} · ${s.payment_method==='cash'?'💵 готівка':s.payment_method==='qr'?'📱 QR':'💳 картка'}</div>
+     `<div class="muted" style="font-size:12.5px;margin-bottom:8px">${new Date(s.created_at).toLocaleString('uk-UA')} · ${s.payment_method==='cash'?'💵 готівка':'💳 картка'}</div>
       ${lines}
       <div style="display:flex;justify-content:space-between;margin-top:10px;font-weight:800;font-size:17px"><span>До повернення</span><span>${money(s.total)} ₴</span></div>
       ${s.fiscal_code?`<div class="card" style="margin-top:10px;padding:10px 12px;border-color:#b8863b55;background:#fff7e8;font-size:12.5px">⚠️ Фіскальний чек №${esc(s.fiscal_code)} — повернення в ПРРО оформи в кабінеті Checkbox.</div>`:''}
@@ -1654,7 +1646,6 @@ async function renderReport(){
     const cost=sales.reduce((a,b)=>a+num(b.cost_total),0);
     const cash=sales.filter(s=>s.payment_method==='cash').reduce((a,b)=>a+num(b.total),0);
     const card=sales.filter(s=>s.payment_method==='card').reduce((a,b)=>a+num(b.total),0);
-    const qr=sales.filter(s=>s.payment_method==='qr').reduce((a,b)=>a+num(b.total),0);
     const checks=sales.length, avg=checks?rev/checks:0, margin=rev-cost;
     const marginPct = rev? (margin/rev*100):0;
     // топ-позиції: фільтруємо sale_items у діапазоні
@@ -1673,7 +1664,7 @@ async function renderReport(){
        <div class="kpi"><div class="k">Виручка</div><div class="v">${money(rev)} ₴</div><div class="s">${checks} чеків · сер. ${money(avg)} ₴</div></div>
        <div class="kpi"><div class="k">Собівартість</div><div class="v">${money(cost)} ₴</div></div>
        <div class="kpi"><div class="k">Маржа</div><div class="v">${money(margin)} ₴</div><div class="s">${money(marginPct)}%</div></div>
-       <div class="kpi"><div class="k">Готівка / Картка / QR</div><div class="v" style="font-size:18px">${money(cash)} / ${money(card)} / ${money(qr)}</div></div>
+       <div class="kpi"><div class="k">Готівка / Картка</div><div class="v" style="font-size:18px">${money(cash)} / ${money(card)}</div></div>
        <div class="kpi"><div class="k">Списано за період</div><div class="v">${money(woSum)} ₴</div></div>
      </div>
      <div class="row" style="align-items:flex-start;gap:16px">
@@ -1773,7 +1764,6 @@ PAGES.settings = function(){
        <div style="display:flex;gap:10px;flex-wrap:wrap">
          <label class="chip" style="cursor:pointer;gap:8px"><input type="checkbox" id="cb-pay-cash" ${cbPay().cash?'checked':''} style="width:18px;height:18px;accent-color:var(--anthracite)"> 💵 Готівка</label>
          <label class="chip" style="cursor:pointer;gap:8px"><input type="checkbox" id="cb-pay-card" ${cbPay().card?'checked':''} style="width:18px;height:18px;accent-color:var(--anthracite)"> 💳 Картка</label>
-         <label class="chip" style="cursor:pointer;gap:8px"><input type="checkbox" id="cb-pay-qr" ${cbPay().qr?'checked':''} style="width:18px;height:18px;accent-color:var(--anthracite)"> 📱 QR</label>
        </div>
        <div class="muted" style="font-size:12px;margin-top:6px">Якщо увімкнено фіскалізацію, але не обрано жодного — <b>зміну відкрити не можна</b>. Оплати без галочки проводяться без ПРРО.</div>
      </div>
@@ -1784,28 +1774,9 @@ PAGES.settings = function(){
      </div>
      <div id="cb-status" class="muted" style="font-size:12.5px;margin-top:10px"></div>
    </div>
-   <div class="card">
-     <h3 style="margin-top:0">QR / Monobank Acquiring</h3>
-     <label style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line-2);border-radius:12px;cursor:pointer;margin-bottom:12px;background:#fff">
-       <input type="checkbox" id="mb-qr" ${qrEnabled()?'checked':''} style="width:20px;height:20px;accent-color:var(--anthracite)">
-       <div><b>Кнопка «📱 QR» у касі</b>
-       <div class="muted" style="font-size:12.5px">Вимкнеш — на екрані продажу залишаться лише Готівка і Картка.</div></div>
-     </label>
-     <button class="btn sm" onclick="saveMonobank()">Зберегти</button>
-     <div class="muted" style="font-size:12px;margin-top:10px">Для реальної оплати через Monobank: файл <code>api/monobank.js</code> у репозиторії + токен <code>MONO_TOKEN</code> у Vercel → Environment Variables. Без токена кнопка працює в демо-режимі (чек проводиться, банк не викликається).</div>
-   </div>`;
+   `;
   renderMenuQR();
 };
-async function saveMonobank(){
-  const cfg={qr_enabled: $('#mb-qr').checked};
-  try{
-    const existing = arr(await SB.get(`app_settings?select=id&branch_id=eq.${State.branchId}&key=eq.monobank&limit=1`))[0];
-    if(existing){ const r=await SB.patch(`app_settings?id=eq.${existing.id}`,{value:cfg,updated_at:new Date().toISOString()}); if(sbErr(r))throw r; }
-    else { const r=await SB.post('app_settings', withBranch({key:'monobank',value:cfg})); if(sbErr(r))throw r; }
-    State.monobank=cfg;
-    toast(cfg.qr_enabled?'Кнопку QR увімкнено':'Кнопку QR вимкнено','ok');
-  }catch(e){ reportErr(e,'Налаштування QR'); }
-}
 function menuUrl(){
   return location.origin && location.origin.startsWith('http')
     ? location.origin + '/menu.html'
@@ -1832,10 +1803,10 @@ async function saveCheckbox(){
     license_key: $('#cb-lic').value.trim(),
     pin: $('#cb-pin').value.trim(),
     cashier_name: $('#cb-cashier').value.trim(),
-    pay: { cash:$('#cb-pay-cash').checked, card:$('#cb-pay-card').checked, qr:$('#cb-pay-qr').checked },
+    pay: { cash:$('#cb-pay-cash').checked, card:$('#cb-pay-card').checked },
     login: State.checkbox.login||'', password: State.checkbox.password||'',
   };
-  if(cfg.enabled && !(cfg.pay.cash||cfg.pay.card||cfg.pay.qr)){
+  if(cfg.enabled && !(cfg.pay.cash||cfg.pay.card)){
     if(!confirm('Не обрано жодного виду оплати для фіскалізації. Тоді зміну не можна буде відкрити, поки не обереш або не вимкнеш фіскалізацію. Зберегти все одно?')) return;
   }
   try{
