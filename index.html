@@ -1454,20 +1454,44 @@ PAGES.stock = function(){
         <td class="num"><button class="btn sm ghost" onclick="editIng('${g.id}')">✎</button></td></tr>`;
     }).join('') : `<tr><td colspan="7" class="muted" style="text-align:center;padding:20px">${(State.q.stock||'').trim()?'Нічого не знайдено':'Інгредієнтів ще немає'}</td></tr>`}</tbody></table></div>`;
 };
+function ingCategories(){
+  const set=new Set();
+  (State.ingredients||[]).forEach(g=>{ const c=(g.category||'').trim(); if(c) set.add(c); });
+  return [...set].sort((a,b)=>a.localeCompare(b,'uk'));
+}
 function editIng(id){
   const g = id? ing(id) : {name:'',unit:'g',stock:0,cost:0,min_stock:0,category:'',emoji:''};
   const uOpts=Object.entries(UNITS).map(([k,v])=>`<option value="${k}" ${g.unit===k?'selected':''}>${v}</option>`).join('');
+  const curCat=(g.category||'').trim();
+  const cats=ingCategories(); if(curCat && !cats.includes(curCat)) cats.push(curCat);
+  const catOpts=`<option value="">— без категорії —</option>`+cats.map(c=>`<option value="${esc(c)}" ${curCat===c?'selected':''}>${esc(c)}</option>`).join('');
   modal(id?'Інгредієнт':'Новий інгредієнт',
    `<div class="row"><label class="fld" style="flex:2"><span>Назва</span><input id="g-name" class="inp" value="${esc(g.name)}" placeholder="Кава в зернах"></label>
      <div class="fld"><span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:5px">Емодзі</span>${emojiField('g-emoji', g.emoji)}</div></div>
     <div class="row"><label class="fld"><span>Од. виміру</span><select id="g-unit" class="inp">${uOpts}</select></label>
-      <label class="fld"><span>Категорія</span><input id="g-cat" class="inp" value="${esc(g.category||'')}"></label></div>
+      <label class="fld"><span>Категорія</span>
+        <select id="g-cat" class="inp">${catOpts}</select>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input id="g-cat-new" class="inp" placeholder="Або введи нову і натисни +" onkeydown="if(event.key==='Enter'){event.preventDefault();addIngCategoryInline();}">
+          <button type="button" class="btn" style="flex:0 0 52px;font-size:22px;padding:0" onclick="addIngCategoryInline()">+</button>
+        </div>
+      </label></div>
     <div class="row"><label class="fld"><span>Залишок</span><input id="g-stock" class="inp" type="number" step="0.001" value="${g.stock||0}"></label>
       <label class="fld"><span>Собівартість за 1, ₴</span><input id="g-cost" class="inp" type="number" step="0.01" value="${g.cost||0}"></label>
       <label class="fld"><span>Мін. залишок</span><input id="g-min" class="inp" type="number" step="0.001" value="${g.min_stock||0}"></label></div>`,
    `${id?`<button class="btn danger" onclick="delRow('ingredients','${id}','ingredients')">Видалити</button>`:''}
     <div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
     <button class="btn" onclick="saveIng('${id||''}')">Зберегти</button>`);
+}
+function addIngCategoryInline(){
+  const inp=$('#g-cat-new'); const name=inp.value.trim();
+  if(!name){ toast('Введи назву категорії','err'); inp.focus(); return; }
+  const sel=$('#g-cat');
+  const ex=[...sel.options].find(o=>o.value.toLowerCase()===name.toLowerCase());
+  if(ex){ sel.value=ex.value; inp.value=''; toast('Така категорія вже є — обрано її','ok'); return; }
+  const opt=document.createElement('option'); opt.value=name; opt.textContent=name;
+  sel.appendChild(opt); sel.value=name; inp.value='';
+  toast('Категорію «'+name+'» додано ✓','ok');
 }
 async function saveIng(id){
   const d={name:$('#g-name').value.trim(),emoji:$('#g-emoji').value.trim(),unit:$('#g-unit').value,
