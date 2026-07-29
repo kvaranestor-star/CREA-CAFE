@@ -291,6 +291,7 @@ body.kiosk #kiosk-tools{display:flex}
     <div id="kiosk-tools">
       <button class="btn sm" onclick="go('pos')">🛒 Магазин</button>
       <button class="btn sm ghost" onclick="go('cash')">💵 Каса</button>
+      <button class="btn sm ghost" onclick="go('delivreq')">🧾 Накладна</button>
     </div>
     <div class="spacer"></div>
     <div id="shift-pill" class="pill">Зміна…</div>
@@ -414,7 +415,7 @@ function reportErr(e, where){
 const State = {
   user:null, branchId:null,
   branches:[], users:[], ingredients:[], categories:[], items:[], variants:[],
-  modifiers:[], itemMods:[], recipes:[], suppliers:[], customers:[],
+  modifiers:[], itemMods:[], recipes:[], suppliers:[], customers:[], deliveryRequests:[],
   shift:null,            // поточна відкрита зміна
   cart:[],               // POS корзина
   checkbox:{enabled:false}, // фіскалізація ПРРО
@@ -496,8 +497,15 @@ async function loadAll(){
   State.recipes=arr(recs); State.suppliers=arr(sups); State.customers=arr(custs); State.users=arr(users);
   await loadShift();
   await loadSettings();
+  await loadDeliveryRequests();
 }
 function arr(x){ return Array.isArray(x)?x:[]; }
+async function loadDeliveryRequests(){
+  try{
+    const r = await SB.get(`delivery_requests?select=*&branch_id=eq.${State.branchId}&order=requested_at.desc&limit=50`);
+    State.deliveryRequests = arr(r);
+  }catch(e){ State.deliveryRequests = []; }  // таблиці ще нема (міграція не прогнана) — не падаємо
+}
 async function loadSettings(){
   try{
     const r = await SB.get(`app_settings?select=*&branch_id=eq.${State.branchId}&key=eq.checkbox&limit=1`);
@@ -545,7 +553,7 @@ async function syncData(){
   try{
     const key=()=>JSON.stringify([State.ingredients,State.categories,State.items,State.variants,
       State.modifiers,State.itemMods,State.recipes,State.suppliers,State.customers,State.users,
-      State.shift,State.checkbox]);
+      State.shift,State.checkbox,State.deliveryRequests]);
     const before=key();
     await loadAll();
     if(key()!==before){
@@ -559,7 +567,7 @@ async function syncData(){
 
 /* ============================ ROUTER ============================ */
 const PAGES = {}; // name -> render()
-const BARISTA_PAGES = ['pos','cash'];   // баристі доступний тільки продаж (зі зміною) + каса ±
+const BARISTA_PAGES = ['pos','cash','delivreq'];   // баристі доступний тільки продаж (зі зміною) + каса ± + накладні
 function isBarista(){ return State.user && State.user.role === 'barista'; }
 function applyRole(){
   const b = isBarista();
@@ -1588,7 +1596,13 @@ async function saveIng(id){
 /* ============================ PAGE: ПРИХІД ============================ */
 PAGES.delivery = function(){
   const supOpts=`<option value="">— оберіть —</option>`+State.suppliers.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  const pendingCount=(State.deliveryRequests||[]).filter(r=>r.status==='pending').length;
   $('#view').innerHTML=`<div class="page-head"><h1>Прихід від постачальника</h1><div class="line"></div></div>
+   <div class="card" style="margin-bottom:16px">
+     <h3 style="margin-top:0;display:flex;align-items:center;gap:8px">Запити на прихід від бариста
+       ${pendingCount?`<span class="tag danger">${pendingCount} нов${pendingCount===1?'ий':'их'}</span>`:''}</h3>
+     <div id="delreq-box"></div>
+   </div>
    <div class="card" style="margin-bottom:16px">
      <div class="row">
        <label class="fld"><span>Постачальник</span>
@@ -1610,8 +1624,92 @@ PAGES.delivery = function(){
        <button class="btn" onclick="saveDelivery()">Провести прихід</button></div>
    </div>
    <div id="del-hist"></div>`;
-  addDelRow(); renderDeliveries();
+  addDelRow(); renderDeliveries(); renderDeliveryRequests();
 };
+function reqBaristaName(uid){ const u=State.users.find(x=>x.id===uid); return u?u.name:'—'; }
+function reqStatusTag(r){
+  if(r.status==='approved') return `<span class="tag ok">✓ Прийнято</span>`;
+  if(r.status==='rejected') return `<span class="tag danger">✕ Відхилено${r.reject_reason?': '+esc(r.reject_reason):''}</span>`;
+  return `<span class="tag warm">⏳ Очікує</span>`;
+}
+function renderDeliveryRequests(){
+  const box=$('#delreq-box'); if(!box) return;
+  const list=State.deliveryRequests||[];
+  const pending=list.filter(r=>r.status==='pending');
+  const done=list.filter(r=>r.status!=='pending').slice(0,10);
+  const sup=id=>State.suppliers.find(s=>s.id===id)?.name||'—';
+  box.innerHTML = `
+    ${pending.length?`<div style="display:flex;flex-direction:column;gap:10px">${pending.map(r=>`
+      <div class="card" style="border:1px solid var(--warm);display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+        ${r.photo_url?`<a href="${esc(r.photo_url)}" target="_blank" rel="noopener"><img src="${esc(r.photo_url)}" alt="накладна" style="width:96px;height:96px;object-fit:cover;border-radius:12px;border:1px solid var(--line-2)"></a>`:'<div class="muted" style="width:96px;height:96px;display:flex;align-items:center;justify-content:center;border-radius:12px;border:1px solid var(--line-2)">без фото</div>'}
+        <div style="flex:1;min-width:200px">
+          <div style="font-weight:700">${esc(reqBaristaName(r.requested_by))} · ${new Date(r.requested_at).toLocaleString('uk-UA')}</div>
+          <div class="muted" style="font-size:13px;margin-top:2px">Постачальник: ${esc(sup(r.supplier_id))}${r.note?' · '+esc(r.note):''}</div>
+          <div style="font-weight:800;font-size:17px;margin-top:6px">${money(r.total)} ₴</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn sm ghost" onclick="rejectDeliveryRequest('${r.id}')">Відхилити</button>
+          <button class="btn sm" onclick="approveDeliveryRequest('${r.id}')">Прийняти</button>
+        </div>
+      </div>`).join('')}</div>`
+    :'<div class="muted">Нових накладних від баристи немає.</div>'}
+    ${done.length?`<div style="margin-top:14px"><div class="muted" style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;margin-bottom:6px">Останні розглянуті</div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Бариста</th><th class="num">Сума</th><th>Статус</th></tr></thead>
+      <tbody>${done.map(r=>`<tr><td>${new Date(r.requested_at).toLocaleString('uk-UA')}</td><td>${esc(reqBaristaName(r.requested_by))}</td><td class="num">${money(r.total)} ₴</td><td>${reqStatusTag(r)}</td></tr>`).join('')}</tbody></table></div></div>`:''}`;
+}
+async function approveDeliveryRequest(id){
+  const req=(State.deliveryRequests||[]).find(r=>r.id===id); if(!req) return;
+  const dateStr=new Date(req.requested_at).toLocaleDateString('uk-UA');
+  if(!confirm(`Прийняти накладну на ${money(req.total)} ₴? Прихід буде датовано ${dateStr} (день, коли бариста подав накладну).`)) return;
+  try{
+    const itemsR=await SB.get(`delivery_request_items?select=*&request_id=eq.${id}`); if(sbErr(itemsR)) throw itemsR;
+    const rows=arr(itemsR);
+    if(!rows.length){ toast('У накладній немає жодної позиції','err'); return; }
+    const dRes=await SB.post('deliveries', withBranch({
+      supplier_id:req.supplier_id||null, total:req.total, note:req.note||'',
+      created_by:State.user.id, created_at:req.requested_at,
+    }));
+    if(sbErr(dRes)) throw dRes;
+    const del=Array.isArray(dRes)?dRes[0]:dRes;
+    const di=await SB.post('delivery_items', rows.map(r=>({delivery_id:del.id, ingredient_id:r.ingredient_id, qty:r.qty, unit_cost:r.unit_cost})));
+    if(sbErr(di)) throw di;
+    const updated=[];
+    for(const r of rows){
+      const g=ing(r.ingredient_id); if(!g) continue;
+      const newStock=round2(num(g.stock)+num(r.qty));
+      const newCost = num(r.unit_cost)>0 ? round2(num(r.unit_cost)) : num(g.cost);
+      const up=await SB.patch(`ingredients?id=eq.${r.ingredient_id}`,{stock:newStock,cost:newCost}); if(sbErr(up)) throw up;
+      if(round2(num(g.cost))!==newCost) updated.push(`${g.name}: ${money(g.cost)} → ${money(newCost)} ₴`);
+      g.stock=newStock; g.cost=newCost;
+      await SB.post('stock_moves', withBranch({ingredient_id:r.ingredient_id, delta:r.qty, reason:'income', ref_id:del.id}));
+    }
+    const upR=await SB.patch(`delivery_requests?id=eq.${id}`,{status:'approved', reviewed_by:State.user.id, reviewed_at:new Date().toISOString(), delivery_id:del.id});
+    if(sbErr(upR)) throw upR;
+    req.status='approved'; req.delivery_id=del.id;
+    toast('Прихід прийнято ✓ Датовано '+dateStr+(updated.length?' · собівартість оновлено':''),'ok');
+    PAGES.delivery();
+  }catch(e){ reportErr(e,'Прихід'); }
+}
+function rejectDeliveryRequest(id){
+  const req=(State.deliveryRequests||[]).find(r=>r.id===id); if(!req) return;
+  modal('Відхилити накладну',
+   `<div class="muted" style="margin-bottom:10px">${esc(reqBaristaName(req.requested_by))} · ${money(req.total)} ₴ · ${new Date(req.requested_at).toLocaleString('uk-UA')}</div>
+    <label class="fld"><span>Причина відхилення (обов'язково)</span><textarea id="rq-reason" class="inp" rows="3" placeholder="Напр.: невірні ціни, нечитабельне фото, помилка в позиціях…"></textarea></label>`,
+   `<div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
+    <button class="btn danger" onclick="confirmRejectRequest('${id}')">Відхилити</button>`);
+}
+async function confirmRejectRequest(id){
+  const reason=$('#rq-reason').value.trim();
+  if(!reason){ toast('Вкажи причину відхилення','err'); return; }
+  try{
+    const r=await SB.patch(`delivery_requests?id=eq.${id}`,{status:'rejected', reject_reason:reason, reviewed_by:State.user.id, reviewed_at:new Date().toISOString()});
+    if(sbErr(r)) throw r;
+    const req=(State.deliveryRequests||[]).find(x=>x.id===id); if(req){ req.status='rejected'; req.reject_reason=reason; }
+    closeModal();
+    toast('Накладну відхилено','ok');
+    PAGES.delivery();
+  }catch(e){ reportErr(e,'Відхилення'); }
+}
 function delRowHtml(){
   const opts=State.ingredients.map(g=>`<option value="${g.id}" data-cost="${g.cost}">${esc(g.name)} (${UNITS[g.unit]})</option>`).join('');
   return `<div class="row del-row" style="gap:8px">
@@ -1654,17 +1752,111 @@ async function renderDeliveries(){
   box.innerHTML=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Постачальник</th><th>Коментар</th><th class="num">Сума</th></tr></thead>
    <tbody>${arr(r).map(d=>`<tr><td>${new Date(d.created_at).toLocaleString('uk-UA')}</td><td>${esc(sup(d.supplier_id))}</td><td>${esc(d.note||'')}</td><td class="num"><b>${money(d.total)} ₴</b></td></tr>`).join('')||'<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">Приходів ще немає</td></tr>'}</tbody></table></div>`;
 }
-async function addSupplierInline(){
-  const inp=$('#d-sup-new'); const name=inp.value.trim();
+
+/* ============================ PAGE: НАКЛАДНА (бариста → запит на прихід) ============================ */
+PAGES.delivreq = function(){
+  const supOpts=`<option value="">— оберіть —</option>`+State.suppliers.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  const myReqs=(State.deliveryRequests||[]).filter(r=>r.requested_by===State.user.id).slice(0,15);
+  window.__reqPhotoUrl='';
+  $('#view').innerHTML=`<div class="page-head"><h1>Накладна на прихід</h1><div class="line"></div></div>
+   <div class="card" style="margin-bottom:16px">
+     <div class="row">
+       <label class="fld"><span>Постачальник</span>
+         <select id="dr-sup" class="inp">${supOpts}</select>
+         <div style="display:flex;gap:8px;margin-top:8px">
+           <input id="dr-sup-new" class="inp" placeholder="Або введи нового і натисни +" onkeydown="if(event.key==='Enter'){event.preventDefault();addSupplierInline('dr-sup','dr-sup-new');}">
+           <button type="button" class="btn" style="flex:0 0 52px;font-size:22px;padding:0" onclick="addSupplierInline('dr-sup','dr-sup-new')">+</button>
+         </div>
+       </label>
+       <label class="fld"><span>Коментар</span><input id="dr-note" class="inp"></label></div>
+     <div style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:6px 0">Позиції накладної</div>
+     <div id="dr-rows" style="display:flex;flex-direction:column;gap:6px"></div>
+     <button class="btn sm ghost" style="margin-top:8px" onclick="addDelReqRow()">+ рядок</button>
+     <div class="fld" style="margin-top:16px">
+       <span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:6px">Фото накладної — обов'язково</span>
+       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+         <div id="dr-ph-prev" style="width:86px;height:86px;flex:0 0 86px;border-radius:12px;border:1px solid var(--line-2);background:#fff center/cover no-repeat"></div>
+         <button type="button" class="btn sm ghost" onclick="$('#dr-ph-file').click()">📷 Сфотографувати накладну</button>
+         <input type="file" id="dr-ph-file" accept="image/*" capture="environment" style="display:none" onchange="uploadInvoicePhoto(this)">
+       </div>
+       <div class="muted" id="dr-ph-status" style="font-size:11.5px;margin-top:5px">Без фото надіслати накладну не можна.</div>
+     </div>
+     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
+       <div style="font-weight:800;font-size:18px">Разом: <span id="dr-total">0.00</span> ₴</div>
+       <button class="btn" onclick="submitDeliveryRequest()">Надіслати на підтвердження</button></div>
+   </div>
+   <div class="card"><h3 style="margin-top:0">Мої накладні</h3>
+     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th class="num">Сума</th><th>Статус</th></tr></thead>
+      <tbody>${myReqs.length?myReqs.map(r=>`<tr><td>${new Date(r.requested_at).toLocaleString('uk-UA')}</td><td class="num">${money(r.total)} ₴</td><td>${reqStatusTag(r)}</td></tr>`).join(''):'<tr><td colspan="3" class="muted" style="text-align:center;padding:20px">Накладних ще немає</td></tr>'}</tbody></table></div>
+   </div>`;
+  addDelReqRow();
+};
+function delReqRowHtml(){
+  const opts=State.ingredients.map(g=>`<option value="${g.id}" data-cost="${g.cost}">${esc(g.name)} (${UNITS[g.unit]})</option>`).join('');
+  return `<div class="row dr-row" style="gap:8px">
+    <select class="inp dr-ing" style="flex:2" onchange="fillDelReqCost(this)">${opts}</select>
+    <input class="inp dr-qty" type="number" step="0.001" placeholder="к-сть" oninput="recalcDelReq()">
+    <input class="inp dr-cost" type="number" step="0.01" placeholder="ціна/од" oninput="recalcDelReq()">
+    <button type="button" class="btn ghost" style="flex:0 0 44px" onclick="this.closest('.dr-row').remove();recalcDelReq()">✕</button></div>`;
+}
+function addDelReqRow(){ $('#dr-rows').insertAdjacentHTML('beforeend', delReqRowHtml()); }
+function fillDelReqCost(sel){ const c=sel.selectedOptions[0]?.dataset.cost; const inp=sel.closest('.dr-row').querySelector('.dr-cost'); if(inp && !inp.value) inp.value=c||''; recalcDelReq(); }
+function recalcDelReq(){ let t=0; $$('.dr-row').forEach(r=>{ t+=num($('.dr-qty',r).value)*num($('.dr-cost',r).value); }); $('#dr-total').textContent=money(t); }
+async function uploadInvoicePhoto(inp){
+  const f=inp.files && inp.files[0]; if(!f) return;
+  const st=$('#dr-ph-status');
+  try{
+    st.textContent='Стискаю фото…';
+    const blob=await resizeImage(f, 1400, 0.85);
+    st.textContent='Завантажую…';
+    const name='invoice-'+uid()+'.jpg';
+    const res=await fetch(CONFIG.SUPABASE_URL.replace(/\/+$/,'')+'/storage/v1/object/invoices/'+name,{
+      method:'POST',
+      headers:{'apikey':CONFIG.SUPABASE_ANON_KEY,'Authorization':'Bearer '+CONFIG.SUPABASE_ANON_KEY,
+               'Content-Type':'image/jpeg','x-upsert':'true'},
+      body: blob});
+    if(!res.ok){ const t=await res.text(); throw new Error(t.slice(0,160)||('HTTP '+res.status)); }
+    window.__reqPhotoUrl = CONFIG.SUPABASE_URL.replace(/\/+$/,'')+'/storage/v1/object/public/invoices/'+name;
+    $('#dr-ph-prev').style.backgroundImage=`url('${window.__reqPhotoUrl}')`;
+    st.textContent='Фото завантажено ✓';
+  }catch(e){
+    console.error(e);
+    st.textContent='Помилка завантаження: '+(e.message||e)+'. Перевір, чи прогнана migration_delivery_requests.sql.';
+    toast('Фото не завантажилось','err');
+  }finally{ inp.value=''; }
+}
+async function submitDeliveryRequest(){
+  const rows=$$('.dr-row').map(r=>({ingredient_id:$('.dr-ing',r).value,qty:round2(num($('.dr-qty',r).value)),unit_cost:round2(num($('.dr-cost',r).value))})).filter(r=>r.ingredient_id && r.qty>0);
+  if(!rows.length){ toast('Додай позиції накладної','err'); return; }
+  if(!window.__reqPhotoUrl){ toast('Обов\'язково сфотографуй накладну перед надсиланням','err'); return; }
+  const total=round2(rows.reduce((s,r)=>s+r.qty*r.unit_cost,0));
+  try{
+    const rRes=await SB.post('delivery_requests', withBranch({
+      supplier_id:$('#dr-sup').value||null, note:$('#dr-note').value.trim(),
+      photo_url:window.__reqPhotoUrl, total, status:'pending', requested_by:State.user.id,
+    }));
+    if(sbErr(rRes)) throw rRes;
+    const req=Array.isArray(rRes)?rRes[0]:rRes;
+    const ri=await SB.post('delivery_request_items', rows.map(r=>({request_id:req.id, ingredient_id:r.ingredient_id, qty:r.qty, unit_cost:r.unit_cost})));
+    if(sbErr(ri)) throw ri;
+    State.deliveryRequests = [req, ...(State.deliveryRequests||[])];
+    window.__reqPhotoUrl='';
+    toast('Накладну надіслано власнику на підтвердження ✓','ok');
+    PAGES.delivreq();
+  }catch(e){ reportErr(e,'Накладна'); }
+}
+async function addSupplierInline(selId, inputId){
+  selId=selId||'d-sup'; inputId=inputId||'d-sup-new';
+  const inp=$('#'+inputId); const name=inp.value.trim();
   if(!name){ toast('Введи назву постачальника','err'); inp.focus(); return; }
   const ex=State.suppliers.find(s=>(s.name||'').toLowerCase()===name.toLowerCase());
-  if(ex){ $('#d-sup').value=ex.id; inp.value=''; toast('Такий постачальник вже є — обрано його','ok'); return; }
+  if(ex){ $('#'+selId).value=ex.id; inp.value=''; toast('Такий постачальник вже є — обрано його','ok'); return; }
   try{
     const r=await SB.post('suppliers', withBranch({name})); if(sbErr(r)) throw r;
     const s=Array.isArray(r)?r[0]:r;
     State.suppliers.push(s);
     State.suppliers.sort((a,b)=>(a.name||'').localeCompare(b.name||'','uk'));
-    const sel=$('#d-sup');
+    const sel=$('#'+selId);
     sel.innerHTML=`<option value="">— оберіть —</option>`+State.suppliers.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');
     sel.value=s.id; inp.value='';
     toast('Постачальника «'+name+'» додано ✓','ok');
