@@ -292,6 +292,7 @@ body.kiosk #kiosk-tools{display:flex}
       <button class="btn sm" onclick="go('pos')">🛒 Магазин</button>
       <button class="btn sm ghost" onclick="go('cash')">💵 Каса</button>
       <button class="btn sm ghost" onclick="go('delivreq')">🧾 Прихід</button>
+      <button class="btn sm ghost" onclick="go('writeoffreq')">🗑️ Списання</button>
     </div>
     <div class="spacer"></div>
     <div id="shift-pill" class="pill">Зміна…</div>
@@ -415,7 +416,7 @@ function reportErr(e, where){
 const State = {
   user:null, branchId:null,
   branches:[], users:[], ingredients:[], categories:[], items:[], variants:[],
-  modifiers:[], itemMods:[], recipes:[], suppliers:[], customers:[], deliveryRequests:[],
+  modifiers:[], itemMods:[], recipes:[], suppliers:[], customers:[], deliveryRequests:[], writeoffRequests:[],
   shift:null,            // поточна відкрита зміна
   cart:[],               // POS корзина
   checkbox:{enabled:false}, // фіскалізація ПРРО
@@ -498,6 +499,7 @@ async function loadAll(){
   await loadShift();
   await loadSettings();
   await loadDeliveryRequests();
+  await loadWriteoffRequests();
 }
 function arr(x){ return Array.isArray(x)?x:[]; }
 async function loadDeliveryRequests(){
@@ -505,6 +507,12 @@ async function loadDeliveryRequests(){
     const r = await SB.get(`delivery_requests?select=*&branch_id=eq.${State.branchId}&order=requested_at.desc&limit=50`);
     State.deliveryRequests = arr(r);
   }catch(e){ State.deliveryRequests = []; }  // таблиці ще нема (міграція не прогнана) — не падаємо
+}
+async function loadWriteoffRequests(){
+  try{
+    const r = await SB.get(`writeoff_requests?select=*&branch_id=eq.${State.branchId}&order=requested_at.desc&limit=50`);
+    State.writeoffRequests = arr(r);
+  }catch(e){ State.writeoffRequests = []; }  // таблиці ще нема (міграція не прогнана) — не падаємо
 }
 async function loadSettings(){
   try{
@@ -553,7 +561,7 @@ async function syncData(){
   try{
     const key=()=>JSON.stringify([State.ingredients,State.categories,State.items,State.variants,
       State.modifiers,State.itemMods,State.recipes,State.suppliers,State.customers,State.users,
-      State.shift,State.checkbox,State.deliveryRequests]);
+      State.shift,State.checkbox,State.deliveryRequests,State.writeoffRequests]);
     const before=key();
     await loadAll();
     if(key()!==before){
@@ -567,7 +575,7 @@ async function syncData(){
 
 /* ============================ ROUTER ============================ */
 const PAGES = {}; // name -> render()
-const BARISTA_PAGES = ['pos','cash','delivreq'];   // баристі доступний тільки продаж (зі зміною) + каса ± + прихід
+const BARISTA_PAGES = ['pos','cash','delivreq','writeoffreq'];   // баристі доступний тільки продаж (зі зміною) + каса ± + прихід + списання
 function isBarista(){ return State.user && State.user.role === 'barista'; }
 function applyRole(){
   const b = isBarista();
@@ -1939,8 +1947,14 @@ async function saveSupplier(id){
 /* ============================ PAGE: СПИСАННЯ ============================ */
 PAGES.writeoff = function(){
   const opts=State.ingredients.map(g=>`<option value="${g.id}" data-cost="${g.cost}" data-unit="${g.unit}">${esc(g.name)} (${UNITS[g.unit]}) · ${money(g.stock)}</option>`).join('');
+  const pendingWoCount=(State.writeoffRequests||[]).filter(r=>r.status==='pending').length;
   window.__writeoffPhotoUrl='';
   $('#view').innerHTML=`<div class="page-head"><h1>Списання</h1><div class="line"></div></div>
+   <div class="card" style="margin-bottom:16px">
+     <h3 style="margin-top:0;display:flex;align-items:center;gap:8px">Запити на списання від бариста
+       ${pendingWoCount?`<span class="tag danger">${pendingWoCount} нов${pendingWoCount===1?'ий':'их'}</span>`:''}</h3>
+     <div id="woreq-box"></div>
+   </div>
    <div class="card" style="max-width:480px;margin-bottom:16px">
      <label class="fld"><span>Інгредієнт</span><select id="w-ing" class="inp">${opts}</select></label>
      <div class="row"><label class="fld"><span>Кількість</span><input id="w-qty" class="inp" type="number" step="0.001"></label>
@@ -1957,8 +1971,91 @@ PAGES.writeoff = function(){
      <button class="btn danger block" style="margin-top:12px" onclick="saveWriteoff()">Списати зі складу</button>
    </div>
    <div id="wo-hist"></div>`;
-  renderWriteoffs();
+  renderWriteoffRequests(); renderWriteoffs();
 };
+let _doneWoReqPage = 0;
+function renderWriteoffRequests(){
+  const box=$('#woreq-box'); if(!box) return;
+  const list=State.writeoffRequests||[];
+  const pending=list.filter(r=>r.status==='pending');
+  const done=list.filter(r=>r.status!=='pending');
+  const PAGE_SIZE=3;
+  const pageCount=Math.max(1,Math.ceil(done.length/PAGE_SIZE));
+  if(_doneWoReqPage>pageCount-1) _doneWoReqPage=pageCount-1;
+  if(_doneWoReqPage<0) _doneWoReqPage=0;
+  const pageItems=done.slice(_doneWoReqPage*PAGE_SIZE,_doneWoReqPage*PAGE_SIZE+PAGE_SIZE);
+  box.innerHTML = `
+    ${pending.length?`<div style="display:flex;flex-direction:column;gap:10px">${pending.map(r=>{const g=ing(r.ingredient_id);return `
+      <div class="card" style="border:1px solid var(--warm);display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+        ${r.photo_url?`<a href="${esc(r.photo_url)}" target="_blank" rel="noopener"><img src="${esc(r.photo_url)}" alt="списання" style="width:96px;height:96px;object-fit:cover;border-radius:12px;border:1px solid var(--line-2)"></a>`:'<div class="muted" style="width:96px;height:96px;display:flex;align-items:center;justify-content:center;border-radius:12px;border:1px solid var(--line-2)">без фото</div>'}
+        <div style="flex:1;min-width:200px">
+          <div style="font-weight:700">${esc(reqBaristaName(r.requested_by))} · ${new Date(r.requested_at).toLocaleString('uk-UA')}</div>
+          <div class="muted" style="font-size:13px;margin-top:2px">${esc(g?g.name:'—')} · ${money(r.qty)} ${g?UNITS[g.unit]:''}${r.reason?' · '+esc(r.reason):''}</div>
+          <div style="font-weight:800;font-size:17px;margin-top:6px">${money(r.cost)} ₴</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn sm ghost" onclick="rejectWriteoffRequest('${r.id}')">Відхилити</button>
+          <button class="btn sm" onclick="approveWriteoffRequest('${r.id}')">Прийняти</button>
+        </div>
+      </div>`;}).join('')}</div>`
+    :'<div class="muted">Нових запитів на списання від бариста немає.</div>'}
+    ${done.length?`<div style="margin-top:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div class="muted" style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:700">Останні розглянуті</div>
+        ${pageCount>1?`<div style="display:flex;align-items:center;gap:8px">
+          <button class="btn sm ghost" style="padding:2px 10px" onclick="changeDoneWoReqPage(-1)" ${_doneWoReqPage===0?'disabled':''}>‹</button>
+          <span class="muted" style="font-size:12px">${_doneWoReqPage+1}/${pageCount}</span>
+          <button class="btn sm ghost" style="padding:2px 10px" onclick="changeDoneWoReqPage(1)" ${_doneWoReqPage>=pageCount-1?'disabled':''}>›</button>
+        </div>`:''}
+      </div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Бариста</th><th>Інгредієнт</th><th class="num">Сума</th><th>Статус</th></tr></thead>
+      <tbody>${pageItems.map(r=>{const g=ing(r.ingredient_id);return `<tr><td>${new Date(r.requested_at).toLocaleString('uk-UA')}</td><td>${esc(reqBaristaName(r.requested_by))}</td><td>${esc(g?g.name:'—')}</td><td class="num">${money(r.cost)} ₴</td><td>${reqStatusTag(r)}</td></tr>`;}).join('')}</tbody></table></div></div>`:''}`;
+}
+function changeDoneWoReqPage(delta){ _doneWoReqPage+=delta; renderWriteoffRequests(); }
+async function approveWriteoffRequest(id){
+  const req=(State.writeoffRequests||[]).find(r=>r.id===id); if(!req) return;
+  const g=ing(req.ingredient_id); if(!g){ toast('Інгредієнт не знайдено','err'); return; }
+  const dateStr=new Date(req.requested_at).toLocaleDateString('uk-UA');
+  if(!confirm(`Списати ${money(req.qty)} ${UNITS[g.unit]} «${g.name}» (${money(req.cost)} ₴)? Списання буде датовано ${dateStr} (день, коли бариста подав запит).`)) return;
+  try{
+    const wRes=await SB.post('writeoffs', withBranch({
+      ingredient_id:req.ingredient_id, qty:req.qty, cost:req.cost, reason:req.reason||'', photo_url:req.photo_url||'',
+      created_by:State.user.id, created_at:req.requested_at,
+    }));
+    if(sbErr(wRes)) throw wRes;
+    const wo=Array.isArray(wRes)?wRes[0]:wRes;
+    const newStock=round2(num(g.stock)-num(req.qty));
+    const up=await SB.patch(`ingredients?id=eq.${req.ingredient_id}`,{stock:newStock}); if(sbErr(up)) throw up;
+    g.stock=newStock;
+    await SB.post('stock_moves', withBranch({ingredient_id:req.ingredient_id, delta:-req.qty, reason:'writeoff', ref_id:wo.id}));
+    const upR=await SB.patch(`writeoff_requests?id=eq.${id}`,{status:'approved', reviewed_by:State.user.id, reviewed_at:new Date().toISOString(), writeoff_id:wo.id});
+    if(sbErr(upR)) throw upR;
+    req.status='approved'; req.writeoff_id=wo.id;
+    toast('Списання прийнято ✓ Датовано '+dateStr,'ok');
+    PAGES.writeoff();
+  }catch(e){ reportErr(e,'Списання'); }
+}
+function rejectWriteoffRequest(id){
+  const req=(State.writeoffRequests||[]).find(r=>r.id===id); if(!req) return;
+  const g=ing(req.ingredient_id);
+  modal('Відхилити списання',
+   `<div class="muted" style="margin-bottom:10px">${esc(reqBaristaName(req.requested_by))} · ${esc(g?g.name:'—')} · ${money(req.qty)} ${g?UNITS[g.unit]:''} · ${new Date(req.requested_at).toLocaleString('uk-UA')}</div>
+    <label class="fld"><span>Причина відхилення (обов'язково)</span><textarea id="wq-reason" class="inp" rows="3" placeholder="Напр.: нечитабельне фото, помилка в кількості…"></textarea></label>`,
+   `<div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
+    <button class="btn danger" onclick="confirmRejectWriteoffRequest('${id}')">Відхилити</button>`);
+}
+async function confirmRejectWriteoffRequest(id){
+  const reason=$('#wq-reason').value.trim();
+  if(!reason){ toast('Вкажи причину відхилення','err'); return; }
+  try{
+    const r=await SB.patch(`writeoff_requests?id=eq.${id}`,{status:'rejected', reject_reason:reason, reviewed_by:State.user.id, reviewed_at:new Date().toISOString()});
+    if(sbErr(r)) throw r;
+    const req=(State.writeoffRequests||[]).find(x=>x.id===id); if(req){ req.status='rejected'; req.reject_reason=reason; }
+    closeModal();
+    toast('Списання відхилено','ok');
+    PAGES.writeoff();
+  }catch(e){ reportErr(e,'Відхилення'); }
+}
 async function uploadWriteoffPhoto(inp){
   const f=inp.files && inp.files[0]; if(!f) return;
   const st=$('#w-ph-status');
@@ -2003,6 +2100,89 @@ async function renderWriteoffs(){
   const r=await SB.get(`writeoffs?select=*&branch_id=eq.${State.branchId}&order=created_at.desc&limit=30`);
   box.innerHTML=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Фото</th><th>Дата</th><th>Інгредієнт</th><th class="num">К-сть</th><th>Причина</th><th class="num">Сума</th></tr></thead>
    <tbody>${arr(r).map(w=>{const g=ing(w.ingredient_id);return `<tr><td>${w.photo_url?`<a href="${esc(w.photo_url)}" target="_blank" rel="noopener"><img src="${esc(w.photo_url)}" alt="фото" style="width:40px;height:40px;object-fit:cover;border-radius:8px;border:1px solid var(--line-2)"></a>`:'<span class="muted">—</span>'}</td><td>${new Date(w.created_at).toLocaleString('uk-UA')}</td><td>${esc(g?g.name:'—')}</td><td class="num">${money(w.qty)} ${g?UNITS[g.unit]:''}</td><td>${esc(w.reason||'')}</td><td class="num">${money(w.cost)} ₴</td></tr>`}).join('')||'<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">Списань ще немає</td></tr>'}</tbody></table></div>`;
+}
+
+/* ============================ PAGE: СПИСАННЯ (бариста → запит на списання) ============================ */
+let _myWoReqPage = 0;
+PAGES.writeoffreq = function(){
+  const opts=State.ingredients.map(g=>`<option value="${g.id}" data-cost="${g.cost}" data-unit="${g.unit}">${esc(g.name)} (${UNITS[g.unit]}) · ${money(g.stock)}</option>`).join('');
+  window.__woReqPhotoUrl='';
+  $('#view').innerHTML=`<div class="page-head"><h1>Списання</h1><div class="line"></div></div>
+   <div class="card" style="max-width:480px;margin-bottom:16px">
+     <label class="fld"><span>Інгредієнт</span><select id="wr-ing" class="inp">${opts}</select></label>
+     <label class="fld"><span>Кількість</span><input id="wr-qty" class="inp" type="number" step="0.001"></label>
+     <label class="fld"><span>Причина</span><select id="wr-reason" class="inp">${WRITEOFF_REASONS.map(r=>`<option>${r}</option>`).join('')}</select></label>
+     <div class="fld" style="margin-top:6px">
+       <span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:6px">Фото списання — обов'язково</span>
+       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+         <div id="wr-ph-prev" style="width:86px;height:86px;flex:0 0 86px;border-radius:12px;border:1px solid var(--line-2);background:#fff center/cover no-repeat"></div>
+         <button type="button" class="btn sm ghost" onclick="$('#wr-ph-file').click()">📷 Сфотографувати</button>
+         <input type="file" id="wr-ph-file" accept="image/*" capture="environment" style="display:none" onchange="uploadWriteoffReqPhoto(this)">
+       </div>
+       <div class="muted" id="wr-ph-status" style="font-size:11.5px;margin-top:5px">Без фото надіслати списання не можна.</div>
+     </div>
+     <button class="btn danger block" style="margin-top:12px" onclick="submitWriteoffRequest()">Надіслати на підтвердження</button>
+   </div>
+   <div class="card"><h3 style="margin-top:0">Мої списання</h3><div id="wr-my-box"></div></div>`;
+  renderMyWriteoffRequests();
+};
+function renderMyWriteoffRequests(){
+  const box=$('#wr-my-box'); if(!box) return;
+  const myReqs=(State.writeoffRequests||[]).filter(r=>r.requested_by===State.user.id);
+  const PAGE_SIZE=3;
+  const pageCount=Math.max(1,Math.ceil(myReqs.length/PAGE_SIZE));
+  if(_myWoReqPage>pageCount-1) _myWoReqPage=pageCount-1;
+  if(_myWoReqPage<0) _myWoReqPage=0;
+  const pageItems=myReqs.slice(_myWoReqPage*PAGE_SIZE,_myWoReqPage*PAGE_SIZE+PAGE_SIZE);
+  box.innerHTML=`${myReqs.length && pageCount>1?`<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:8px">
+      <button class="btn sm ghost" style="padding:2px 10px" onclick="changeMyWoReqPage(-1)" ${_myWoReqPage===0?'disabled':''}>‹</button>
+      <span class="muted" style="font-size:12px">${_myWoReqPage+1}/${pageCount}</span>
+      <button class="btn sm ghost" style="padding:2px 10px" onclick="changeMyWoReqPage(1)" ${_myWoReqPage>=pageCount-1?'disabled':''}>›</button>
+    </div>`:''}
+   <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Інгредієнт</th><th class="num">Сума</th><th>Статус</th></tr></thead>
+    <tbody>${pageItems.length?pageItems.map(r=>{const g=ing(r.ingredient_id);return `<tr><td>${new Date(r.requested_at).toLocaleString('uk-UA')}</td><td>${esc(g?g.name:'—')}</td><td class="num">${money(r.cost)} ₴</td><td>${reqStatusTag(r)}</td></tr>`;}).join(''):'<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">Списань ще немає</td></tr>'}</tbody></table></div>`;
+}
+function changeMyWoReqPage(delta){ _myWoReqPage+=delta; renderMyWriteoffRequests(); }
+async function uploadWriteoffReqPhoto(inp){
+  const f=inp.files && inp.files[0]; if(!f) return;
+  const st=$('#wr-ph-status');
+  try{
+    st.textContent='Стискаю фото…';
+    const blob=await resizeImage(f, 1400, 0.85);
+    st.textContent='Завантажую…';
+    const name='writeoffreq-'+uid()+'.jpg';
+    const res=await fetch(CONFIG.SUPABASE_URL.replace(/\/+$/,'')+'/storage/v1/object/invoices/'+name,{
+      method:'POST',
+      headers:{'apikey':CONFIG.SUPABASE_ANON_KEY,'Authorization':'Bearer '+CONFIG.SUPABASE_ANON_KEY,
+               'Content-Type':'image/jpeg','x-upsert':'true'},
+      body: blob});
+    if(!res.ok){ const t=await res.text(); throw new Error(t.slice(0,160)||('HTTP '+res.status)); }
+    window.__woReqPhotoUrl = CONFIG.SUPABASE_URL.replace(/\/+$/,'')+'/storage/v1/object/public/invoices/'+name;
+    $('#wr-ph-prev').style.backgroundImage=`url('${window.__woReqPhotoUrl}')`;
+    st.textContent='Фото завантажено ✓';
+  }catch(e){
+    console.error(e);
+    st.textContent='Помилка завантаження: '+(e.message||e);
+    toast('Фото не завантажилось','err');
+  }finally{ inp.value=''; }
+}
+async function submitWriteoffRequest(){
+  const ingId=$('#wr-ing').value, qty=round2(num($('#wr-qty').value)), reason=$('#wr-reason').value;
+  const g=ing(ingId); if(!g){ toast('Оберіть інгредієнт','err'); return; }
+  if(qty<=0){ toast('Вкажи кількість','err'); return; }
+  if(!window.__woReqPhotoUrl){ toast('Обов\'язково сфотографуй списання перед надсиланням','err'); return; }
+  const cost=round2(qty*num(g.cost));
+  try{
+    const rRes=await SB.post('writeoff_requests', withBranch({
+      ingredient_id:ingId, qty, reason, photo_url:window.__woReqPhotoUrl, cost, status:'pending', requested_by:State.user.id,
+    }));
+    if(sbErr(rRes)) throw rRes;
+    const req=Array.isArray(rRes)?rRes[0]:rRes;
+    State.writeoffRequests = [req, ...(State.writeoffRequests||[])];
+    window.__woReqPhotoUrl='';
+    toast('Списання надіслано власнику на підтвердження ✓','ok');
+    PAGES.writeoffreq();
+  }catch(e){ reportErr(e,'Списання'); }
 }
 
 /* ============================ PAGE: ЗВІТИ ============================ */
