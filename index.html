@@ -1948,7 +1948,6 @@ async function saveSupplier(id){
 PAGES.writeoff = function(){
   const opts=State.ingredients.map(g=>`<option value="${g.id}" data-cost="${g.cost}" data-unit="${g.unit}">${esc(g.name)} (${UNITS[g.unit]}) · ${money(g.stock)}</option>`).join('');
   const pendingWoCount=(State.writeoffRequests||[]).filter(r=>r.status==='pending').length;
-  window.__writeoffPhotoUrl='';
   $('#view').innerHTML=`<div class="page-head"><h1>Списання</h1><div class="line"></div></div>
    <div class="card" style="margin-bottom:16px">
      <h3 style="margin-top:0;display:flex;align-items:center;gap:8px">Запити на списання від бариста
@@ -1959,15 +1958,6 @@ PAGES.writeoff = function(){
      <label class="fld"><span>Інгредієнт</span><select id="w-ing" class="inp">${opts}</select></label>
      <div class="row"><label class="fld"><span>Кількість</span><input id="w-qty" class="inp" type="number" step="0.001"></label>
        <label class="fld"><span>Причина</span><select id="w-reason" class="inp">${WRITEOFF_REASONS.map(r=>`<option>${r}</option>`).join('')}</select></label></div>
-     <div class="fld" style="margin-top:6px">
-       <span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:6px">Фото списання — обов'язково</span>
-       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-         <div id="w-ph-prev" style="width:86px;height:86px;flex:0 0 86px;border-radius:12px;border:1px solid var(--line-2);background:#fff center/cover no-repeat"></div>
-         <button type="button" class="btn sm ghost" onclick="$('#w-ph-file').click()">📷 Сфотографувати</button>
-         <input type="file" id="w-ph-file" accept="image/*" capture="environment" style="display:none" onchange="uploadWriteoffPhoto(this)">
-       </div>
-       <div class="muted" id="w-ph-status" style="font-size:11.5px;margin-top:5px">Без фото списати не можна.</div>
-     </div>
      <button class="btn danger block" style="margin-top:12px" onclick="saveWriteoff()">Списати зі складу</button>
    </div>
    <div id="wo-hist"></div>`;
@@ -2056,42 +2046,17 @@ async function confirmRejectWriteoffRequest(id){
     PAGES.writeoff();
   }catch(e){ reportErr(e,'Відхилення'); }
 }
-async function uploadWriteoffPhoto(inp){
-  const f=inp.files && inp.files[0]; if(!f) return;
-  const st=$('#w-ph-status');
-  try{
-    st.textContent='Стискаю фото…';
-    const blob=await resizeImage(f, 1400, 0.85);
-    st.textContent='Завантажую…';
-    const name='writeoff-'+uid()+'.jpg';
-    const res=await fetch(CONFIG.SUPABASE_URL.replace(/\/+$/,'')+'/storage/v1/object/invoices/'+name,{
-      method:'POST',
-      headers:{'apikey':CONFIG.SUPABASE_ANON_KEY,'Authorization':'Bearer '+CONFIG.SUPABASE_ANON_KEY,
-               'Content-Type':'image/jpeg','x-upsert':'true'},
-      body: blob});
-    if(!res.ok){ const t=await res.text(); throw new Error(t.slice(0,160)||('HTTP '+res.status)); }
-    window.__writeoffPhotoUrl = CONFIG.SUPABASE_URL.replace(/\/+$/,'')+'/storage/v1/object/public/invoices/'+name;
-    $('#w-ph-prev').style.backgroundImage=`url('${window.__writeoffPhotoUrl}')`;
-    st.textContent='Фото завантажено ✓';
-  }catch(e){
-    console.error(e);
-    st.textContent='Помилка завантаження: '+(e.message||e);
-    toast('Фото не завантажилось','err');
-  }finally{ inp.value=''; }
-}
 async function saveWriteoff(){
   const ingId=$('#w-ing').value, qty=round2(num($('#w-qty').value)), reason=$('#w-reason').value;
   const g=ing(ingId); if(!g){toast('Оберіть інгредієнт','err');return;}
   if(qty<=0){toast('Вкажи кількість','err');return;}
-  if(!window.__writeoffPhotoUrl){ toast('Обов\'язково сфотографуй списання перед збереженням','err'); return; }
   const cost=round2(qty*num(g.cost));
   if(!confirm(`Списати ${qty} ${UNITS[g.unit]} «${g.name}» (${money(cost)} ₴)?`))return;
   try{
-    const r=await SB.post('writeoffs',withBranch({ingredient_id:ingId,qty,cost,reason,photo_url:window.__writeoffPhotoUrl,created_by:State.user.id})); if(sbErr(r))throw r;
+    const r=await SB.post('writeoffs',withBranch({ingredient_id:ingId,qty,cost,reason,created_by:State.user.id})); if(sbErr(r))throw r;
     const newStock=round2(num(g.stock)-qty);
     const up=await SB.patch(`ingredients?id=eq.${ingId}`,{stock:newStock}); if(sbErr(up))throw up; g.stock=newStock;
     await SB.post('stock_moves',withBranch({ingredient_id:ingId,delta:-qty,reason:'writeoff'}));
-    window.__writeoffPhotoUrl='';
     toast('Списано','ok'); PAGES.writeoff();
   }catch(e){ reportErr(e,'Списання'); }
 }
