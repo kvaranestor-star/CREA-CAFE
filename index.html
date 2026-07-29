@@ -392,9 +392,21 @@ const SB = {
 };
 // перевірка «глухих» помилок Supabase (об'єкт {code,message}) — НЕ ковтати мовчки
 function sbErr(r){ return (r && !Array.isArray(r) && r.code) ? r : null; }
+function friendlyDbError(e){
+  const code = e && e.code;
+  const msg = (e && e.message) || '';
+  if(code==='23503' || /foreign key constraint/i.test(msg)){
+    return 'Не можна видалити: цей запис ще десь використовується (наприклад, у техкартах, додатках, чеках чи приходах). Спочатку прибери його звідти, тоді видали.';
+  }
+  if(code==='23505' || /duplicate key|unique constraint/i.test(msg)){
+    return 'Такий запис уже є — назва має бути унікальною.';
+  }
+  return null;
+}
 function reportErr(e, where){
   console.error(where||'', e);
-  const msg = (e && e.message) ? e.message : 'Помилка';
+  const friendly = friendlyDbError(e);
+  const msg = friendly || ((e && e.message) ? e.message : 'Помилка');
   toast((where?where+': ':'')+msg, 'err');
 }
 
@@ -1509,9 +1521,30 @@ function editIng(id){
     <div class="row"><label class="fld"><span>Залишок</span><input id="g-stock" class="inp" type="number" step="0.001" value="${g.stock||0}"></label>
       <label class="fld"><span>Собівартість за 1, ₴</span><input id="g-cost" class="inp" type="number" step="0.01" value="${g.cost||0}"></label>
       <label class="fld"><span>Мін. залишок</span><input id="g-min" class="inp" type="number" step="0.001" value="${g.min_stock||0}"></label></div>`,
-   `${id?`<button class="btn danger" onclick="delRow('ingredients','${id}','ingredients')">Видалити</button>`:''}
+   `${id?`<button class="btn danger" onclick="deleteIngredientSafe('${id}')">Видалити</button>`:''}
     <div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
     <button class="btn" onclick="saveIng('${id||''}')">Зберегти</button>`);
+}
+async function deleteIngredientSafe(id){
+  const g=ing(id); const name=g?g.name:'';
+  if(!confirm(`Видалити інгредієнт «${name}»?`)) return;
+  try{
+    const [recs,mods]=await Promise.all([
+      SB.get(`recipe_items?select=id&ingredient_id=eq.${id}`),
+      SB.get(`modifiers?select=id&ingredient_id=eq.${id}`),
+    ]);
+    const recCnt=arr(recs).length, modCnt=arr(mods).length;
+    if(recCnt||modCnt){
+      const parts=[];
+      if(recCnt) parts.push(`${recCnt} рядк(ах) техкарт`);
+      if(modCnt) parts.push(`${modCnt} додатк(ах)`);
+      toast(`Не можна видалити «${name}»: він використовується у ${parts.join(' і ')}. Спочатку прибери його звідти (у Техкартах чи Додатках), тоді видали.`, 'err');
+      return;
+    }
+    const r=await SB.del(`ingredients?id=eq.${id}`); if(sbErr(r)) throw r;
+    await reloadKey('ingredients');
+    closeModal(); PAGES.stock(); toast('Видалено','ok');
+  }catch(e){ reportErr(e,'Видалення'); }
 }
 function addIngCategoryInline(){
   const inp=$('#g-cat-new'); const name=inp.value.trim();
