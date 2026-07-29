@@ -1139,7 +1139,7 @@ function editCategory(id){
    `<div class="row"><label class="fld" style="flex:2"><span>Назва</span><input id="c-name" class="inp" value="${esc(c.name)}"></label>
     <div class="fld"><span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:5px">Емодзі</span>${emojiField('c-emoji', c.emoji)}</div></div>
     <label class="fld"><span>Порядок</span><input id="c-sort" class="inp" type="number" value="${c.sort||0}"></label>`,
-   `${id?`<button class="btn danger" onclick="delRow('menu_categories','${id}','categories')">Видалити</button>`:''}
+   `${id?`<button class="btn danger" onclick="delCategoryFromModal('${id}')">Видалити</button>`:''}
     <div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
     <button class="btn" onclick="saveCategory('${id||''}')">Зберегти</button>`);
 }
@@ -1158,7 +1158,11 @@ function editItem(id){
   modal(id?'Позиція меню':'Нова позиція',
    `<div class="row"><label class="fld" style="flex:2"><span>Назва</span><input id="i-name" class="inp" value="${esc(i.name)}"></label>
       <div class="fld"><span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:5px">Емодзі</span>${emojiField('i-emoji', i.emoji)}</div></div>
-    <label class="fld"><span>Категорія</span><select id="i-cat" class="inp">${catOpts}</select>
+    <label class="fld"><span>Категорія</span>
+      <div style="display:flex;gap:8px">
+        <select id="i-cat" class="inp" style="flex:1">${catOpts}</select>
+        <button type="button" class="btn ghost" style="flex:0 0 44px" onclick="deleteMenuCategoryInItemForm()" title="Видалити обрану категорію">🗑</button>
+      </div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <input id="i-cat-new" class="inp" placeholder="Або нова категорія і натисни +" onkeydown="if(event.key==='Enter'){event.preventDefault();addCategoryInline();}">
         <button type="button" class="btn" style="flex:0 0 52px;font-size:22px;padding:0" onclick="addCategoryInline()">+</button>
@@ -1204,6 +1208,29 @@ async function addCategoryInline(){
     sel.innerHTML=`<option value="">— без категорії —</option>`+State.categories.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');
     sel.value=c.id; inp.value='';
     toast('Категорію «'+name+'» додано ✓','ok');
+  }catch(e){ reportErr(e,'Категорія'); }
+}
+async function coreDeleteMenuCategory(id){
+  const cat=State.categories.find(c=>c.id===id); const name=cat?cat.name:'';
+  const cnt=State.items.filter(x=>x.category_id===id).length;
+  if(!confirm(cnt?`У категорії «${name}» ${cnt} товар(ів). Видалити категорію? Товари НЕ видаляться — стануть без категорії.`:`Видалити категорію «${name}»?`)) return false;
+  if(cnt){ const r=await SB.patch(`menu_items?category_id=eq.${id}`,{category_id:null}); if(sbErr(r)) throw r; }
+  const r2=await SB.del(`menu_categories?id=eq.${id}`); if(sbErr(r2)) throw r2;
+  await reloadMenu();
+  return {name,cnt};
+}
+async function delCategoryFromModal(id){
+  try{ const res=await coreDeleteMenuCategory(id); if(!res) return;
+    closeModal(); PAGES.menu(); toast('Категорію видалено'+(res.cnt?' — товари без категорії':''),'ok');
+  }catch(e){ reportErr(e,'Категорія'); }
+}
+async function deleteMenuCategoryInItemForm(){
+  const sel=$('#i-cat'); const id=sel.value;
+  if(!id){ toast('Спочатку обери категорію зі списку','err'); return; }
+  try{ const res=await coreDeleteMenuCategory(id); if(!res) return;
+    sel.innerHTML=`<option value="">— без категорії —</option>`+State.categories.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');
+    sel.value='';
+    toast('Категорію видалено'+(res.cnt?' — товари без категорії':''),'ok');
   }catch(e){ reportErr(e,'Категорія'); }
 }
 function varRow(name,price){ return `<div class="row var-row" style="gap:8px"><input class="inp v-name" placeholder="S / M / L" value="${esc(name||'')}"><input class="inp v-price" type="number" step="0.01" placeholder="ціна" value="${price!=null?price:''}"><button type="button" class="btn ghost" style="flex:0 0 44px" onclick="this.closest('.var-row').remove()">✕</button></div>`; }
@@ -1470,7 +1497,10 @@ function editIng(id){
      <div class="fld"><span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:5px">Емодзі</span>${emojiField('g-emoji', g.emoji)}</div></div>
     <div class="row"><label class="fld"><span>Од. виміру</span><select id="g-unit" class="inp">${uOpts}</select></label>
       <label class="fld"><span>Категорія</span>
-        <select id="g-cat" class="inp">${catOpts}</select>
+        <div style="display:flex;gap:8px">
+          <select id="g-cat" class="inp" style="flex:1">${catOpts}</select>
+          <button type="button" class="btn ghost" style="flex:0 0 44px" onclick="deleteIngCategoryInline()" title="Видалити обрану категорію">🗑</button>
+        </div>
         <div style="display:flex;gap:8px;margin-top:8px">
           <input id="g-cat-new" class="inp" placeholder="Або введи нову і натисни +" onkeydown="if(event.key==='Enter'){event.preventDefault();addIngCategoryInline();}">
           <button type="button" class="btn" style="flex:0 0 52px;font-size:22px;padding:0" onclick="addIngCategoryInline()">+</button>
@@ -1493,6 +1523,22 @@ function addIngCategoryInline(){
   sel.appendChild(opt); sel.value=name; inp.value='';
   toast('Категорію «'+name+'» додано ✓','ok');
 }
+async function deleteIngCategoryInline(){
+  const sel=$('#g-cat'); const name=(sel.value||'').trim();
+  if(!name){ toast('Спочатку обери категорію зі списку','err'); return; }
+  const cnt=(State.ingredients||[]).filter(g=>(g.category||'').trim()===name).length;
+  if(!confirm(cnt?`У категорії «${name}» ${cnt} інгредієнт(ів). Видалити категорію? Інгредієнти НЕ видаляться — стануть без категорії.`:`Видалити категорію «${name}»?`)) return;
+  try{
+    if(cnt){
+      const r=await SB.patch(`ingredients?category=eq.${encodeURIComponent(name)}&branch_id=eq.${State.branchId}`,{category:''});
+      if(sbErr(r)) throw r;
+    }
+    State.ingredients=arr(await SB.get(`ingredients?select=*&branch_id=eq.${State.branchId}&order=name`));
+    sel.innerHTML=`<option value="">— без категорії —</option>`+ingCategories().map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    sel.value='';
+    toast('Категорію видалено'+(cnt?' — інгредієнти без категорії':''),'ok');
+  }catch(e){ reportErr(e,'Категорія'); }
+}
 async function saveIng(id){
   const d={name:$('#g-name').value.trim(),emoji:$('#g-emoji').value.trim(),unit:$('#g-unit').value,
     category:$('#g-cat').value.trim(),stock:round2(num($('#g-stock').value)),
@@ -1513,7 +1559,10 @@ PAGES.delivery = function(){
    <div class="card" style="margin-bottom:16px">
      <div class="row">
        <label class="fld"><span>Постачальник</span>
-         <select id="d-sup" class="inp">${supOpts}</select>
+         <div style="display:flex;gap:8px">
+           <select id="d-sup" class="inp" style="flex:1">${supOpts}</select>
+           <button type="button" class="btn ghost" style="flex:0 0 44px" onclick="deleteSupplierInDeliveryForm()" title="Видалити обраного постачальника">🗑</button>
+         </div>
          <div style="display:flex;gap:8px;margin-top:8px">
            <input id="d-sup-new" class="inp" placeholder="Або введи нового і натисни +" onkeydown="if(event.key==='Enter'){event.preventDefault();addSupplierInline();}">
            <button type="button" class="btn" style="flex:0 0 52px;font-size:22px;padding:0" onclick="addSupplierInline()">+</button>
@@ -1588,13 +1637,37 @@ async function addSupplierInline(){
     toast('Постачальника «'+name+'» додано ✓','ok');
   }catch(e){ reportErr(e,'Постачальник'); }
 }
+async function coreDeleteSupplier(id){
+  const sup=State.suppliers.find(s=>s.id===id); const name=sup?sup.name:'';
+  const cnt=arr(await SB.get(`deliveries?select=id&supplier_id=eq.${id}`)).length;
+  if(!confirm(cnt?`У постачальника «${name}» ${cnt} прихід(ів). Видалити постачальника? Приходи НЕ видаляться — залишаться без постачальника.`:`Видалити постачальника «${name}»?`)) return false;
+  if(cnt){ const r=await SB.patch(`deliveries?supplier_id=eq.${id}`,{supplier_id:null}); if(sbErr(r)) throw r; }
+  const r2=await SB.del(`suppliers?id=eq.${id}`); if(sbErr(r2)) throw r2;
+  await reloadKey('suppliers');
+  return {name,cnt};
+}
+async function delSupplierFromModal(id){
+  try{ const res=await coreDeleteSupplier(id); if(!res) return;
+    closeModal(); PAGES.delivery(); toast('Постачальника видалено'+(res.cnt?' — приходи без постачальника':''),'ok');
+  }catch(e){ reportErr(e,'Постачальник'); }
+}
+async function deleteSupplierInDeliveryForm(){
+  const sel=$('#d-sup'); const id=sel.value;
+  if(!id){ toast('Спочатку обери постачальника зі списку','err'); return; }
+  try{ const res=await coreDeleteSupplier(id); if(!res) return;
+    sel.innerHTML=`<option value="">— оберіть —</option>`+State.suppliers.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');
+    sel.value='';
+    renderDeliveries();
+    toast('Постачальника видалено'+(res.cnt?' — приходи без постачальника':''),'ok');
+  }catch(e){ reportErr(e,'Постачальник'); }
+}
 function editSupplier(id){
   const s=id?State.suppliers.find(x=>x.id===id):{name:'',phone:'',note:''};
   modal(id?'Постачальник':'Новий постачальник',
    `<label class="fld"><span>Назва</span><input id="s-name" class="inp" value="${esc(s.name)}"></label>
     <div class="row"><label class="fld"><span>Телефон</span><input id="s-phone" class="inp" value="${esc(s.phone||'')}"></label>
      <label class="fld"><span>Коментар</span><input id="s-note" class="inp" value="${esc(s.note||'')}"></label></div>`,
-   `${id?`<button class="btn danger" onclick="delRow('suppliers','${id}','suppliers')">Видалити</button>`:''}
+   `${id?`<button class="btn danger" onclick="delSupplierFromModal('${id}')">Видалити</button>`:''}
     <div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
     <button class="btn" onclick="saveSupplier('${id||''}')">Зберегти</button>`);
 }
