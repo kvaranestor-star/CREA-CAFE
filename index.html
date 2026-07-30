@@ -1115,6 +1115,7 @@ PAGES.menu = function(){
   $('#view').innerHTML = `<div class="page-head"><h1>Меню</h1><div class="line"></div>
     ${searchInput('menu','Пошук позиції…')}
     <button class="btn ghost" onclick="editCategory()">+ Категорія</button>
+    <button class="btn ghost" onclick="newProduct()">+ Товар (поштучний)</button>
     <button class="btn" onclick="editItem()">+ Позиція</button></div>
    <div id="menu-body"></div>`;
   const body=$('#menu-body');
@@ -1500,7 +1501,6 @@ PAGES.stock = function(){
   const list=State.ingredients.filter(g=>matchQ('stock',g.name));
   $('#view').innerHTML=`<div class="page-head"><h1>Склад</h1><div class="line"></div>
     ${searchInput('stock','Пошук інгредієнта…')}
-    <button class="btn ghost" onclick="newProduct()">+ Товар (поштучний)</button>
     <button class="btn" onclick="editIng()">+ Інгредієнт</button></div>
     ${low.length?`<div class="card" style="margin-bottom:14px;border-color:#b8863b55;background:#fff7e8">⚠️ Мало на складі: ${low.map(g=>esc(g.name)).join(', ')}</div>`:''}
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Інгредієнт</th><th>Категорія</th><th class="num">Залишок</th><th class="num">Собівартість</th><th class="num">Сума</th><th></th></tr></thead>
@@ -1617,10 +1617,41 @@ function newProduct(){
     <div class="row"><label class="fld"><span>Початкова к-сть, шт</span><input id="p-stock" class="inp" type="number" step="1" value="0"></label>
       <label class="fld"><span>Закупівельна ціна за 1, ₴</span><input id="p-cost" class="inp" type="number" step="0.01" value="0"></label>
       <label class="fld"><span>Ціна продажу, ₴</span><input id="p-price" class="inp" type="number" step="0.01" value="0"></label></div>
-    <div class="row"><label class="fld"><span>Категорія в меню</span><select id="p-cat" class="inp">${catOpts}</select></label>
+    <div class="row"><label class="fld"><span>Категорія в меню</span>
+        <div style="display:flex;gap:8px">
+          <select id="p-cat" class="inp" style="flex:1">${catOpts}</select>
+          <button type="button" class="btn ghost" style="flex:0 0 44px" onclick="deleteProductCategoryInline()" title="Видалити обрану категорію">🗑</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input id="p-cat-new" class="inp" placeholder="Або нова категорія і натисни +" onkeydown="if(event.key==='Enter'){event.preventDefault();addProductCategoryInline();}">
+          <button type="button" class="btn" style="flex:0 0 52px;font-size:22px;padding:0" onclick="addProductCategoryInline()">+</button>
+        </div>
+      </label>
       <label class="fld"><span>Мін. залишок, шт</span><input id="p-min" class="inp" type="number" step="1" value="0"></label></div>`,
    `<div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
     <button class="btn" onclick="saveProduct()">Створити товар</button>`);
+}
+function productCatOpts(){ return `<option value="">🛍 Товари (створиться автоматично)</option>`+State.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join(''); }
+async function addProductCategoryInline(){
+  const inp=$('#p-cat-new'); const name=inp.value.trim();
+  if(!name){ toast('Введи назву категорії','err'); inp.focus(); return; }
+  const ex=State.categories.find(c=>(c.name||'').toLowerCase()===name.toLowerCase());
+  if(ex){ $('#p-cat').value=ex.id; inp.value=''; toast('Така категорія вже є — обрано її','ok'); return; }
+  try{
+    const r=await SB.post('menu_categories', withBranch({name, sort:State.categories.length})); if(sbErr(r)) throw r;
+    const c=Array.isArray(r)?r[0]:r;
+    State.categories.push(c);
+    const sel=$('#p-cat'); sel.innerHTML=productCatOpts(); sel.value=c.id; inp.value='';
+    toast('Категорію «'+name+'» додано ✓','ok');
+  }catch(e){ reportErr(e,'Категорія'); }
+}
+async function deleteProductCategoryInline(){
+  const sel=$('#p-cat'); const id=sel.value;
+  if(!id){ toast('Спочатку обери категорію зі списку','err'); return; }
+  try{ const res=await coreDeleteMenuCategory(id); if(!res) return;
+    sel.innerHTML=productCatOpts(); sel.value='';
+    toast('Категорію видалено'+(res.cnt?' — товари без категорії':''),'ok');
+  }catch(e){ reportErr(e,'Категорія'); }
 }
 async function saveProduct(){
   const name=$('#p-name').value.trim(), emoji=$('#p-emoji').value.trim();
