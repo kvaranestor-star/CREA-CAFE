@@ -1115,7 +1115,6 @@ PAGES.menu = function(){
   $('#view').innerHTML = `<div class="page-head"><h1>Меню</h1><div class="line"></div>
     ${searchInput('menu','Пошук позиції…')}
     <button class="btn ghost" onclick="editCategory()">+ Категорія</button>
-    <button class="btn ghost" onclick="newProduct()">+ Товар (поштучний)</button>
     <button class="btn" onclick="editItem()">+ Позиція</button></div>
    <div id="menu-body"></div>`;
   const body=$('#menu-body');
@@ -1188,7 +1187,18 @@ function editItem(id){
   const allMods = State.modifiers;
   const curMods = id? itemModifiers(id).map(m=>m.id):[];
   modal(id?'Позиція меню':'Нова позиція',
-   `<div class="row"><label class="fld" style="flex:2"><span>Назва</span><input id="i-name" class="inp" value="${esc(i.name)}"></label>
+   `${id?'':`<label class="fld"><span>Тип позиції</span>
+      <select id="i-type" class="inp" onchange="$('#i-prod-extra').style.display=this.value==='product'?'':'none'">
+        <option value="recipe">☕ З техкартою — рецепт з інгредієнтів (напої, страви)</option>
+        <option value="product">🛍 Поштучний товар — без техкарти (вода, снек, десерт)</option>
+      </select>
+      <div class="muted" style="font-size:11.5px;margin-top:4px">Поштучний товар одразу з'явиться на складі у штуках: прихід, списання та інвентаризація рахують його автоматично, а продаж сам знімає 1 шт зі складу.</div></label>
+    <div id="i-prod-extra" style="display:none"><div class="row">
+      <label class="fld"><span>Початкова к-сть, шт</span><input id="i-pstock" class="inp" type="number" step="1" value="0"></label>
+      <label class="fld"><span>Закупівельна ціна за 1, ₴</span><input id="i-pcost" class="inp" type="number" step="0.01" value="0"></label>
+      <label class="fld"><span>Мін. залишок, шт</span><input id="i-pmin" class="inp" type="number" step="1" value="0"></label>
+    </div></div>`}
+    <div class="row"><label class="fld" style="flex:2"><span>Назва</span><input id="i-name" class="inp" value="${esc(i.name)}"></label>
       <div class="fld"><span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:5px">Емодзі</span>${emojiField('i-emoji', i.emoji)}</div></div>
     <label class="fld"><span>Категорія</span>
       <div style="display:flex;gap:8px">
@@ -1331,10 +1341,24 @@ async function saveItem(id){
     photo_url: window.__photoUrl || null,
     is_active:$('#i-active').value==='1'};
   if(!d.name){toast('Назва порожня','err');return;}
+  const isProduct = !id && $('#i-type') && $('#i-type').value==='product';
+  if(isProduct && d.price<=0){ toast('Для поштучного товару вкажи базову ціну (це ціна продажу)','err'); return; }
   try{
     let itemId=id;
     if(id){ const r=await SB.patch(`menu_items?id=eq.${id}`,d); if(sbErr(r))throw r; }
     else { const r=await SB.post('menu_items', withBranch(d)); if(sbErr(r))throw r; itemId=(Array.isArray(r)?r[0]:r).id; }
+    // поштучний товар: одразу створюємо його на складі (шт) + рецепт 1:1, щоб продаж знімав зі складу
+    if(isProduct){
+      const gRes=await SB.post('ingredients', withBranch({name:d.name, unit:'pcs',
+        stock:round2(num($('#i-pstock').value)), cost:round2(num($('#i-pcost').value)),
+        retail_price:d.price, min_stock:round2(num($('#i-pmin').value)),
+        category:'Товари', emoji:d.emoji, is_active:true}));
+      if(sbErr(gRes)) throw gRes;
+      const g=Array.isArray(gRes)?gRes[0]:gRes;
+      const rcRes=await SB.post('recipe_items',[{menu_item_id:itemId, variant_id:null, ingredient_id:g.id, qty:1}]);
+      if(sbErr(rcRes)) throw rcRes;
+      State.ingredients=arr(await SB.get(`ingredients?select=*&branch_id=eq.${State.branchId}&order=name`));
+    }
     // варіанти: простий підхід — видалити старі, вставити нові
     await SB.del(`menu_variants?menu_item_id=eq.${itemId}`);
     const vrows=$$('.var-row').map((row,i)=>({menu_item_id:itemId,name:$('.v-name',row).value.trim(),price:round2(num($('.v-price',row).value)),sort:i}))
@@ -1605,88 +1629,6 @@ async function saveIng(id){
     State.ingredients=arr(await SB.get(`ingredients?select=*&branch_id=eq.${State.branchId}&order=name`));
     closeModal(); PAGES.stock(); toast('Збережено','ok');
   }catch(e){ reportErr(e,'Інгредієнт'); }
-}
-
-/* -------- Поштучний товар: одна форма створює склад (шт) + позицію в меню з рецептом 1:1 -------- */
-function newProduct(){
-  const catOpts=`<option value="">🛍 Товари (створиться автоматично)</option>`+State.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
-  modal('Новий товар (поштучний)',
-   `<div class="muted" style="font-size:12.5px;margin-bottom:10px">Товар, що продається як є (вода, снек, десерт): одразу з'явиться на складі в штуках і в меню на касі. Продаж сам зніматиме 1 шт зі складу. Прихід, списання й інвентаризація працюють як звичайно.</div>
-    <div class="row"><label class="fld" style="flex:2"><span>Назва</span><input id="p-name" class="inp" placeholder="Вода негазована 0.5"></label>
-     <div class="fld"><span style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:5px">Емодзі</span>${emojiField('p-emoji','')}</div></div>
-    <div class="row"><label class="fld"><span>Початкова к-сть, шт</span><input id="p-stock" class="inp" type="number" step="1" value="0"></label>
-      <label class="fld"><span>Закупівельна ціна за 1, ₴</span><input id="p-cost" class="inp" type="number" step="0.01" value="0"></label>
-      <label class="fld"><span>Ціна продажу, ₴</span><input id="p-price" class="inp" type="number" step="0.01" value="0"></label></div>
-    <div class="row"><label class="fld"><span>Категорія в меню</span>
-        <div style="display:flex;gap:8px">
-          <select id="p-cat" class="inp" style="flex:1">${catOpts}</select>
-          <button type="button" class="btn ghost" style="flex:0 0 44px" onclick="deleteProductCategoryInline()" title="Видалити обрану категорію">🗑</button>
-        </div>
-        <div style="display:flex;gap:8px;margin-top:8px">
-          <input id="p-cat-new" class="inp" placeholder="Або нова категорія і натисни +" onkeydown="if(event.key==='Enter'){event.preventDefault();addProductCategoryInline();}">
-          <button type="button" class="btn" style="flex:0 0 52px;font-size:22px;padding:0" onclick="addProductCategoryInline()">+</button>
-        </div>
-      </label>
-      <label class="fld"><span>Мін. залишок, шт</span><input id="p-min" class="inp" type="number" step="1" value="0"></label></div>`,
-   `<div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
-    <button class="btn" onclick="saveProduct()">Створити товар</button>`);
-}
-function productCatOpts(){ return `<option value="">🛍 Товари (створиться автоматично)</option>`+State.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join(''); }
-async function addProductCategoryInline(){
-  const inp=$('#p-cat-new'); const name=inp.value.trim();
-  if(!name){ toast('Введи назву категорії','err'); inp.focus(); return; }
-  const ex=State.categories.find(c=>(c.name||'').toLowerCase()===name.toLowerCase());
-  if(ex){ $('#p-cat').value=ex.id; inp.value=''; toast('Така категорія вже є — обрано її','ok'); return; }
-  try{
-    const r=await SB.post('menu_categories', withBranch({name, sort:State.categories.length})); if(sbErr(r)) throw r;
-    const c=Array.isArray(r)?r[0]:r;
-    State.categories.push(c);
-    const sel=$('#p-cat'); sel.innerHTML=productCatOpts(); sel.value=c.id; inp.value='';
-    toast('Категорію «'+name+'» додано ✓','ok');
-  }catch(e){ reportErr(e,'Категорія'); }
-}
-async function deleteProductCategoryInline(){
-  const sel=$('#p-cat'); const id=sel.value;
-  if(!id){ toast('Спочатку обери категорію зі списку','err'); return; }
-  try{ const res=await coreDeleteMenuCategory(id); if(!res) return;
-    sel.innerHTML=productCatOpts(); sel.value='';
-    toast('Категорію видалено'+(res.cnt?' — товари без категорії':''),'ok');
-  }catch(e){ reportErr(e,'Категорія'); }
-}
-async function saveProduct(){
-  const name=$('#p-name').value.trim(), emoji=$('#p-emoji').value.trim();
-  const stock=round2(num($('#p-stock').value)), cost=round2(num($('#p-cost').value));
-  const price=round2(num($('#p-price').value)), minStock=round2(num($('#p-min').value));
-  if(!name){ toast('Назва порожня','err'); return; }
-  if(price<=0){ toast('Вкажи ціну продажу','err'); return; }
-  try{
-    // 1) склад: інгредієнт-товар у штуках
-    const gRes=await SB.post('ingredients', withBranch({name, unit:'pcs', stock, cost, retail_price:price,
-      min_stock:minStock, category:'Товари', emoji, is_active:true}));
-    if(sbErr(gRes)) throw gRes;
-    const g=Array.isArray(gRes)?gRes[0]:gRes;
-    // 2) категорія меню: обрана або «Товари» (створюється, якщо ще немає)
-    let catId=$('#p-cat').value||null;
-    if(!catId){
-      const exist=State.categories.find(c=>c.name.toLowerCase()==='товари');
-      if(exist) catId=exist.id;
-      else{
-        const cRes=await SB.post('menu_categories', withBranch({name:'Товари', emoji:'🛍', sort:State.categories.length}));
-        if(sbErr(cRes)) throw cRes;
-        catId=(Array.isArray(cRes)?cRes[0]:cRes).id;
-      }
-    }
-    // 3) позиція меню з ціною продажу
-    const iRes=await SB.post('menu_items', withBranch({name, emoji, category_id:catId, price, is_active:true}));
-    if(sbErr(iRes)) throw iRes;
-    const it=Array.isArray(iRes)?iRes[0]:iRes;
-    // 4) рецепт 1:1 — продаж знімає 1 шт зі складу
-    const rRes=await SB.post('recipe_items',[{menu_item_id:it.id, variant_id:null, ingredient_id:g.id, qty:1}]);
-    if(sbErr(rRes)) throw rRes;
-    await reloadMenu();
-    State.ingredients=arr(await SB.get(`ingredients?select=*&branch_id=eq.${State.branchId}&order=name`));
-    closeModal(); PAGES.stock(); toast('Товар створено ✓ Він на складі та в меню','ok');
-  }catch(e){ reportErr(e,'Товар'); }
 }
 
 /* ============================ PAGE: ПРИХІД ============================ */
