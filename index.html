@@ -1188,9 +1188,9 @@ function editItem(id){
   const curMods = id? itemModifiers(id).map(m=>m.id):[];
   modal(id?'Позиція меню':'Нова позиція',
    `${id?'':`<label class="fld"><span>Тип позиції</span>
-      <select id="i-type" class="inp" onchange="$('#i-prod-extra').style.display=this.value==='product'?'':'none'">
+      <select id="i-type" class="inp" onchange="const p=this.value==='product';$('#i-prod-extra').style.display=p?'':'none';$('#i-recipe-extra').style.display=p?'none':''">
         <option value="recipe">☕ З техкартою — рецепт з інгредієнтів (напої, страви)</option>
-        <option value="product">🛍 Поштучний товар — без техкарти (вода, снек, десерт)</option>
+        <option value="product">Поштучний товар — без техкарти (вода, снек, десерт)</option>
       </select>
       <div class="muted" style="font-size:11.5px;margin-top:4px">Поштучний товар одразу з'явиться на складі у штуках: прихід, списання та інвентаризація рахують його автоматично, а продаж сам знімає 1 шт зі складу.</div></label>
     <div id="i-prod-extra" style="display:none"><div class="row">
@@ -1221,6 +1221,7 @@ function editItem(id){
       <div class="muted" id="ph-status" style="font-size:11.5px;margin-top:5px"></div>
     </div>
     <label class="fld"><span>Базова ціна, ₴ (якщо без розмірів)</span><input id="i-price" class="inp" type="number" step="0.01" value="${i.price||0}"></label>
+    <div id="i-recipe-extra">
     <div class="fld"><span style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700">Розміри (S/M/L) — опційно</span>
       <div id="var-rows" style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
         ${vs.map(v=>varRow(v.name,v.price)).join('')}
@@ -1231,6 +1232,7 @@ function editItem(id){
       <div id="newmod-rows"></div>
       <button type="button" class="btn sm ghost" style="margin-top:8px" onclick="addNewModRow()">+ Додаток з інгредієнта</button>
       <div class="muted" style="font-size:11.5px;margin-top:5px">Не треба створювати «Еспресо з молоком» окремо — додай молоко як додаток: вкажи +ціну, інгредієнт і скільки списувати зі складу при продажу. Створений додаток збережеться й буде доступний іншим позиціям.</div>
+    </div>
     </div>
     <label class="fld"><span>Активна</span><select id="i-active" class="inp"><option value="1" ${i.is_active!==false?'selected':''}>Так</option><option value="0" ${i.is_active===false?'selected':''}>Ні (прихована)</option></select></label>`,
    `${id?`<button class="btn danger" onclick="delItem('${id}')">Видалити</button>`:''}
