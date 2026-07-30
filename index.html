@@ -1188,8 +1188,8 @@ function editItem(id){
   const curMods = id? itemModifiers(id).map(m=>m.id):[];
   modal(id?'Позиція меню':'Нова позиція',
    `${id?'':`<label class="fld"><span>Тип позиції</span>
-      <select id="i-type" class="inp" onchange="const p=this.value==='product';$('#i-prod-extra').style.display=p?'':'none';$('#i-recipe-extra').style.display=p?'none':''">
-        <option value="recipe">☕ З техкартою — рецепт з інгредієнтів (напої, страви)</option>
+      <select id="i-type" class="inp" onchange="const p=this.value==='product';$('#i-prod-extra').style.display=p?'':'none';$('#i-recipe-extra').style.display=p?'none':'';$('#i-price-label').textContent=p?'Ціна продажу, ₴':'Базова ціна, ₴ (якщо без розмірів)'">
+        <option value="recipe">З техкартою — рецепт з інгредієнтів (напої, страви)</option>
         <option value="product">Поштучний товар — без техкарти (вода, снек, десерт)</option>
       </select>
       <div class="muted" style="font-size:11.5px;margin-top:4px">Поштучний товар одразу з'явиться на складі у штуках: прихід, списання та інвентаризація рахують його автоматично, а продаж сам знімає 1 шт зі складу.</div></label>
@@ -1220,7 +1220,7 @@ function editItem(id){
       </div>
       <div class="muted" id="ph-status" style="font-size:11.5px;margin-top:5px"></div>
     </div>
-    <label class="fld"><span>Базова ціна, ₴ (якщо без розмірів)</span><input id="i-price" class="inp" type="number" step="0.01" value="${i.price||0}"></label>
+    <label class="fld"><span id="i-price-label">Базова ціна, ₴ (якщо без розмірів)</span><input id="i-price" class="inp" type="number" step="0.01" value="${i.price||0}"></label>
     <div id="i-recipe-extra">
     <div class="fld"><span style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700">Розміри (S/M/L) — опційно</span>
       <div id="var-rows" style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
