@@ -470,6 +470,7 @@ function pickEmoji(inputId, e){
   const pop=document.getElementById(inputId+'-picker'); if(pop) pop.classList.add('hidden');
 }
 function withBranch(obj){ return Object.assign({branch_id:State.branchId}, obj); }
+function todayStr(){ return new Date().toISOString().slice(0,10); }
 function ing(id){ return State.ingredients.find(x=>x.id===id); }
 function item(id){ return State.items.find(x=>x.id===id); }
 
@@ -1707,7 +1708,7 @@ async function approveDeliveryRequest(id){
       const up=await SB.patch(`ingredients?id=eq.${r.ingredient_id}`,{stock:newStock,cost:newCost}); if(sbErr(up)) throw up;
       if(round2(num(g.cost))!==newCost) updated.push(`${g.name}: ${money(g.cost)} → ${money(newCost)} ₴`);
       g.stock=newStock; g.cost=newCost;
-      await SB.post('stock_moves', withBranch({ingredient_id:r.ingredient_id, delta:r.qty, reason:'income', ref_id:del.id}));
+      await SB.post('stock_moves', withBranch({ingredient_id:r.ingredient_id, delta:r.qty, reason:'income', ref_id:del.id, created_at:req.requested_at}));
     }
     const upR=await SB.patch(`delivery_requests?id=eq.${id}`,{status:'approved', reviewed_by:State.user.id, reviewed_at:new Date().toISOString(), delivery_id:del.id});
     if(sbErr(upR)) throw upR;
@@ -2020,7 +2021,7 @@ async function approveWriteoffRequest(id){
     const newStock=round2(num(g.stock)-num(req.qty));
     const up=await SB.patch(`ingredients?id=eq.${req.ingredient_id}`,{stock:newStock}); if(sbErr(up)) throw up;
     g.stock=newStock;
-    await SB.post('stock_moves', withBranch({ingredient_id:req.ingredient_id, delta:-req.qty, reason:'writeoff', ref_id:wo.id}));
+    await SB.post('stock_moves', withBranch({ingredient_id:req.ingredient_id, delta:-req.qty, reason:'writeoff', ref_id:wo.id, created_at:req.requested_at}));
     const upR=await SB.patch(`writeoff_requests?id=eq.${id}`,{status:'approved', reviewed_by:State.user.id, reviewed_at:new Date().toISOString(), writeoff_id:wo.id});
     if(sbErr(upR)) throw upR;
     req.status='approved'; req.writeoff_id=wo.id;
@@ -2177,15 +2178,15 @@ function renderInventoryForm(){
   const list=State.ingredients.slice().sort((a,b)=>(a.category||'').localeCompare(b.category||'','uk')||a.name.localeCompare(b.name,'uk'));
   const pf=_invPrefill;
   const pfMap={}; if(pf) (pf.items||[]).forEach(it=>{ pfMap[it.ingredient_id]=it.actual_qty; });
-  const dateVal = pf?pf.count_date:new Date().toISOString().slice(0,10);
+  const today=todayStr();
   $('#view').innerHTML=`<div class="page-head"><h1>${pf?'Редагування інвентаризації':'Нова інвентаризація'}</h1><div class="line"></div>
     <button class="btn ghost" onclick="cancelInventoryForm()">← Назад до історії</button></div>
    <div class="card" style="margin-bottom:14px">
      <div class="row">
-       <label class="fld"><span>Дата інвентаризації</span><input id="inv-date" class="inp" type="date" value="${dateVal}"></label>
+       <label class="fld"><span>Дата інвентаризації</span><input id="inv-date" class="inp" type="date" value="${today}" min="${today}" max="${today}" readonly></label>
        <label class="fld" style="flex:2"><span>Коментар (необов'язково)</span><input id="inv-note" class="inp" value="${esc(pf?pf.note||'':'')}" placeholder="Напр.: інвентаризація в кінці зміни"></label>
      </div>
-     <div class="muted" style="font-size:13px;margin-top:6px">Впиши фактичну кількість лише для тих позицій, які перевірив — порожні поля не змінюються. Система звірить з обліковим залишком і після підпису сама скоригує склад.</div>
+     <div class="muted" style="font-size:13px;margin-top:6px">Впиши фактичну кількість лише для тих позицій, які перевірив — порожні поля не змінюються. Система звірить з обліковим залишком і після підпису сама скоригує склад. Інвентаризацію заднім числом провести не можна — тільки поточною датою.</div>
    </div>
    <div class="card" style="margin-bottom:14px">
      <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Інгредієнт</th><th>Категорія</th><th class="num">Обліково</th><th class="num" style="width:140px">Фактично</th><th class="num">Різниця</th></tr></thead>
@@ -2251,6 +2252,7 @@ function recalcInvSummary(){
 async function signInventory(){
   const countDate=$('#inv-date').value;
   if(!countDate){ toast('Вкажи дату інвентаризації','err'); return; }
+  if(countDate!==todayStr()){ toast('Інвентаризацію заднім числом провести не можна — лише поточною датою','err'); return; }
   const rows=[];
   $$('.inv-row').forEach(tr=>{
     const inp=tr.querySelector('.inv-actual'); const val=inp.value.trim();
