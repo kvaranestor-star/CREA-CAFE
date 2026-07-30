@@ -293,6 +293,7 @@ body.kiosk #kiosk-tools{display:flex}
       <button class="btn sm ghost" onclick="go('cash')">💵 Каса</button>
       <button class="btn sm ghost" onclick="go('delivreq')">🧾 Прихід</button>
       <button class="btn sm ghost" onclick="go('writeoffreq')">🗑️ Списання</button>
+      <button class="btn sm ghost" onclick="go('inventory')">🧮 Інвентаризація</button>
     </div>
     <div class="spacer"></div>
     <div id="shift-pill" class="pill">Зміна…</div>
@@ -577,7 +578,7 @@ async function syncData(){
 
 /* ============================ ROUTER ============================ */
 const PAGES = {}; // name -> render()
-const BARISTA_PAGES = ['pos','cash','delivreq','writeoffreq'];   // баристі доступний тільки продаж (зі зміною) + каса ± + прихід + списання
+const BARISTA_PAGES = ['pos','cash','delivreq','writeoffreq','inventory'];   // баристі доступний тільки продаж (зі зміною) + каса ± + прихід + списання + інвентаризація (без цін)
 function isBarista(){ return State.user && State.user.role === 'barista'; }
 function applyRole(){
   const b = isBarista();
@@ -2187,6 +2188,7 @@ function renderInventoryForm(){
        <label class="fld" style="flex:2"><span>Коментар (необов'язково)</span><input id="inv-note" class="inp" value="${esc(pf?pf.note||'':'')}" placeholder="Напр.: інвентаризація в кінці зміни"></label>
      </div>
      <div class="muted" style="font-size:13px;margin-top:6px">Впиши фактичну кількість лише для тих позицій, які перевірив — порожні поля не змінюються. Система звірить з обліковим залишком і після підпису сама скоригує склад. Інвентаризацію заднім числом провести не можна — тільки поточною датою.</div>
+     <div style="margin-top:10px;padding:10px 12px;border-radius:11px;border:1px solid #b8863b55;background:#fff7e8;font-size:13px">⚠️ Інвентаризацію роби <b>в кінці зміни</b> або <b>на початку наступного дня перед продажами</b>. Якщо під час підрахунку пройде продаж — результат буде некоректний.</div>
    </div>
    <div class="card" style="margin-bottom:14px">
      <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Інгредієнт</th><th>Категорія</th><th class="num">Обліково</th><th class="num" style="width:140px">Фактично</th><th class="num">Різниця</th></tr></thead>
@@ -2245,8 +2247,10 @@ function recalcInvSummary(){
   shortageCost=round2(shortageCost); shortageRetail=round2(shortageRetail);
   surplusCost=round2(surplusCost); surplusRetail=round2(surplusRetail);
   const parts=[`Порахованих позицій: <b>${cnt}</b>`];
-  if(shortageCost>0||shortageRetail>0) parts.push(`Нестача: <b style="color:var(--danger)">${money(shortageCost)} ₴ (опт) / ${money(shortageRetail)} ₴ (роздріб)</b>`);
-  if(surplusCost>0||surplusRetail>0) parts.push(`Надлишок: <b style="color:var(--ok)">${money(surplusCost)} ₴ (опт) / ${money(surplusRetail)} ₴ (роздріб)</b>`);
+  if(!isBarista()){   // баристі суми не показуємо
+    if(shortageCost>0||shortageRetail>0) parts.push(`Нестача: <b style="color:var(--danger)">${money(shortageCost)} ₴ (опт) / ${money(shortageRetail)} ₴ (роздріб)</b>`);
+    if(surplusCost>0||surplusRetail>0) parts.push(`Надлишок: <b style="color:var(--ok)">${money(surplusCost)} ₴ (опт) / ${money(surplusRetail)} ₴ (роздріб)</b>`);
+  }
   box.innerHTML = parts.join(' · ');
 }
 async function signInventory(){
@@ -2264,7 +2268,10 @@ async function signInventory(){
   if(!rows.length){ toast('Впиши хоча б одну фактичну кількість','err'); return; }
   const diffCost=round2(rows.reduce((s,r)=>s+r.diff*r.cost,0));
   const diffRetail=round2(rows.reduce((s,r)=>s+r.diff*r.retail,0));
-  if(!confirm(`Підписати інвентаризацію на ${new Date(countDate).toLocaleDateString('uk-UA')}: ${rows.length} порахованих позицій, вплив на суму складу ${diffCost>0?'+':''}${money(diffCost)} ₴ (опт) / ${diffRetail>0?'+':''}${money(diffRetail)} ₴ (роздріб). Після підпису склад буде скориговано. Продовжити?`)) return;
+  const confirmMsg = isBarista()
+    ? `Підписати інвентаризацію на ${new Date(countDate).toLocaleDateString('uk-UA')}: ${rows.length} порахованих позицій. Після підпису склад буде скориговано. Продовжити?`
+    : `Підписати інвентаризацію на ${new Date(countDate).toLocaleDateString('uk-UA')}: ${rows.length} порахованих позицій, вплив на суму складу ${diffCost>0?'+':''}${money(diffCost)} ₴ (опт) / ${diffRetail>0?'+':''}${money(diffRetail)} ₴ (роздріб). Після підпису склад буде скориговано. Продовжити?`;
+  if(!confirm(confirmMsg)) return;
   try{
     const cRes=await SB.post('inventory_counts', withBranch({
       count_date:countDate, note:$('#inv-note').value.trim(), items_count:rows.length,
@@ -2290,26 +2297,28 @@ async function renderInventoryHistory(){
   const box=$('#inv-hist'); if(!box) return;
   const r=await SB.get(`inventory_counts?select=*&branch_id=eq.${State.branchId}&order=count_date.desc,created_at.desc&limit=30`);
   const list=arr(r);
+  const bar=isBarista();
   box.innerHTML = `<div class="card"><h3 style="margin-top:0">Історія інвентаризацій</h3>
-    ${list.length?`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Хто підписав</th><th>Коментар</th><th class="num">Позицій</th><th class="num">Опт</th><th class="num">Роздріб</th><th></th></tr></thead>
-    <tbody>${list.map(c=>`<tr><td>${new Date(c.count_date).toLocaleDateString('uk-UA')}</td><td>${esc(reqBaristaName(c.created_by))}</td><td>${esc(c.note||'')}</td><td class="num">${c.items_count}</td><td class="num" style="color:${num(c.diff_cost)<0?'var(--danger)':'var(--ok)'}">${num(c.diff_cost)>0?'+':''}${money(c.diff_cost)} ₴</td><td class="num" style="color:${num(c.diff_retail)<0?'var(--danger)':'var(--ok)'}">${num(c.diff_retail)>0?'+':''}${money(c.diff_retail)} ₴</td><td class="num"><button class="btn sm ghost" onclick="viewInventoryDetails('${c.id}')">Деталі</button></td></tr>`).join('')}</tbody></table></div>`
+    ${list.length?`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Хто підписав</th><th>Коментар</th><th class="num">Позицій</th>${bar?'':'<th class="num">Опт</th><th class="num">Роздріб</th>'}<th></th></tr></thead>
+    <tbody>${list.map(c=>`<tr><td>${new Date(c.count_date).toLocaleDateString('uk-UA')}</td><td>${esc(reqBaristaName(c.created_by))}</td><td>${esc(c.note||'')}</td><td class="num">${c.items_count}</td>${bar?'':`<td class="num" style="color:${num(c.diff_cost)<0?'var(--danger)':'var(--ok)'}">${num(c.diff_cost)>0?'+':''}${money(c.diff_cost)} ₴</td><td class="num" style="color:${num(c.diff_retail)<0?'var(--danger)':'var(--ok)'}">${num(c.diff_retail)>0?'+':''}${money(c.diff_retail)} ₴</td>`}<td class="num"><button class="btn sm ghost" onclick="viewInventoryDetails('${c.id}')">Деталі</button></td></tr>`).join('')}</tbody></table></div>`
     :'<div class="muted">Інвентаризацій ще не проводили.</div>'}</div>`;
 }
 async function viewInventoryDetails(id){
   try{
     const r=await SB.get(`inventory_count_items?select=*&count_id=eq.${id}`);
     const items=arr(r);
+    const bar=isBarista();
     const rowsHtml=items.length? items.map(it=>{
       const g=ing(it.ingredient_id);
       return `<tr><td>${esc(g?g.name:'—')}</td><td class="num">${money(it.expected_qty)}</td><td class="num">${money(it.actual_qty)}</td>
         <td class="num" style="color:${num(it.diff_qty)<0?'var(--danger)':'var(--ok)'};font-weight:700">${num(it.diff_qty)>0?'+':''}${money(it.diff_qty)} ${g?UNITS[g.unit]:''}</td>
-        <td class="num">${num(it.diff_cost)>0?'+':''}${money(it.diff_cost)} ₴</td>
-        <td class="num">${num(it.diff_retail_cost)>0?'+':''}${money(it.diff_retail_cost)} ₴</td></tr>`;
-    }).join('') : '<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">Немає даних</td></tr>';
+        ${bar?'':`<td class="num">${num(it.diff_cost)>0?'+':''}${money(it.diff_cost)} ₴</td>
+        <td class="num">${num(it.diff_retail_cost)>0?'+':''}${money(it.diff_retail_cost)} ₴</td>`}</tr>`;
+    }).join('') : `<tr><td colspan="${bar?4:6}" class="muted" style="text-align:center;padding:20px">Немає даних</td></tr>`;
     modal('Деталі інвентаризації',
-     `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Інгредієнт</th><th class="num">Обліково</th><th class="num">Фактично</th><th class="num">Різниця</th><th class="num">Опт, ₴</th><th class="num">Роздріб, ₴</th></tr></thead>
+     `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Інгредієнт</th><th class="num">Обліково</th><th class="num">Фактично</th><th class="num">Різниця</th>${bar?'':'<th class="num">Опт, ₴</th><th class="num">Роздріб, ₴</th>'}</tr></thead>
       <tbody>${rowsHtml}</tbody></table></div>`,
-     `<button class="btn danger" onclick="unsignInventory('${id}')">Зняти підпис і редагувати</button>
+     `${bar?'':`<button class="btn danger" onclick="unsignInventory('${id}')">Зняти підпис і редагувати</button>`}
       <div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Закрити</button>`);
   }catch(e){ reportErr(e,'Інвентаризація'); }
 }
