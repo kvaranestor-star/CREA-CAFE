@@ -2191,8 +2191,8 @@ function renderInventoryForm(){
      <div style="margin-top:10px;padding:10px 12px;border-radius:11px;border:1px solid #b8863b55;background:#fff7e8;font-size:13px">⚠️ Інвентаризацію роби <b>в кінці зміни</b> або <b>на початку наступного дня перед продажами</b>. Якщо під час підрахунку пройде продаж — результат буде некоректний.</div>
    </div>
    <div class="card" style="margin-bottom:14px">
-     <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Інгредієнт</th><th>Категорія</th><th class="num">Обліково</th><th class="num" style="width:140px">Фактично</th><th class="num">Різниця</th></tr></thead>
-     <tbody id="inv-rows">${list.length?list.map(g=>invRowHtml(g,pfMap[g.id])).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">Інгредієнтів ще немає</td></tr>'}</tbody></table></div>
+     <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Інгредієнт</th><th>Категорія</th>${isBarista()?'':'<th class="num">Обліково</th>'}<th class="num" style="width:140px">Фактично</th>${isBarista()?'':'<th class="num">Різниця</th>'}</tr></thead>
+     <tbody id="inv-rows">${list.length?list.map(g=>invRowHtml(g,pfMap[g.id])).join(''):`<tr><td colspan="${isBarista()?4:6}" class="muted" style="text-align:center;padding:20px">Інгредієнтів ще немає</td></tr>`}</tbody></table></div>
    </div>
    <div class="card" style="margin-bottom:16px">
      <div id="inv-summary" class="muted" style="margin-bottom:12px">Розбіжностей поки немає</div>
@@ -2206,18 +2206,20 @@ function renderInventoryForm(){
 }
 function invRowHtml(g,prefillVal){
   const val = (prefillVal===undefined||prefillVal===null)?'':prefillVal;
+  const bar=isBarista();   // баристі не показуємо обліковий залишок і різницю — тільки поле «Фактично» (сліпий підрахунок)
   return `<tr class="inv-row" data-id="${g.id}" data-cost="${g.cost}" data-retail="${g.retail_price||0}" data-unit="${esc(UNITS[g.unit]||'')}" data-expected="${num(g.stock)}">
     <td style="font-size:18px">${g.emoji?esc(g.emoji):'📦'}</td>
     <td><b>${esc(g.name)}</b></td>
     <td>${esc(g.category||'')}</td>
-    <td class="num">${money(g.stock)} ${UNITS[g.unit]||''}</td>
-    <td class="num"><input class="inp inv-actual" type="number" step="0.001" value="${val}" placeholder="${money(g.stock)}" oninput="recalcInvRow(this)" style="text-align:right;max-width:120px"></td>
-    <td class="num inv-diff muted">—</td>
+    ${bar?'':`<td class="num">${money(g.stock)} ${UNITS[g.unit]||''}</td>`}
+    <td class="num"><input class="inp inv-actual" type="number" step="0.001" value="${val}" placeholder="${bar?('к-сть, '+(UNITS[g.unit]||'')):money(g.stock)}" oninput="recalcInvRow(this)" style="text-align:right;max-width:120px"></td>
+    ${bar?'':'<td class="num inv-diff muted">—</td>'}
   </tr>`;
 }
 function recalcInvRow(inp){
   const tr=inp.closest('.inv-row');
   const td=tr.querySelector('.inv-diff');
+  if(!td){ recalcInvSummary(); return; }   // бариста: колонки «Різниця» немає
   const val=inp.value.trim();
   const unit=tr.dataset.unit;
   if(val===''){ td.textContent='—'; td.removeAttribute('style'); td.className='num inv-diff muted'; recalcInvSummary(); return; }
@@ -2310,13 +2312,13 @@ async function viewInventoryDetails(id){
     const bar=isBarista();
     const rowsHtml=items.length? items.map(it=>{
       const g=ing(it.ingredient_id);
-      return `<tr><td>${esc(g?g.name:'—')}</td><td class="num">${money(it.expected_qty)}</td><td class="num">${money(it.actual_qty)}</td>
-        <td class="num" style="color:${num(it.diff_qty)<0?'var(--danger)':'var(--ok)'};font-weight:700">${num(it.diff_qty)>0?'+':''}${money(it.diff_qty)} ${g?UNITS[g.unit]:''}</td>
-        ${bar?'':`<td class="num">${num(it.diff_cost)>0?'+':''}${money(it.diff_cost)} ₴</td>
+      return `<tr><td>${esc(g?g.name:'—')}</td>${bar?'':`<td class="num">${money(it.expected_qty)}</td>`}<td class="num">${money(it.actual_qty)} ${g?UNITS[g.unit]:''}</td>
+        ${bar?'':`<td class="num" style="color:${num(it.diff_qty)<0?'var(--danger)':'var(--ok)'};font-weight:700">${num(it.diff_qty)>0?'+':''}${money(it.diff_qty)} ${g?UNITS[g.unit]:''}</td>
+        <td class="num">${num(it.diff_cost)>0?'+':''}${money(it.diff_cost)} ₴</td>
         <td class="num">${num(it.diff_retail_cost)>0?'+':''}${money(it.diff_retail_cost)} ₴</td>`}</tr>`;
-    }).join('') : `<tr><td colspan="${bar?4:6}" class="muted" style="text-align:center;padding:20px">Немає даних</td></tr>`;
+    }).join('') : `<tr><td colspan="${bar?2:6}" class="muted" style="text-align:center;padding:20px">Немає даних</td></tr>`;
     modal('Деталі інвентаризації',
-     `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Інгредієнт</th><th class="num">Обліково</th><th class="num">Фактично</th><th class="num">Різниця</th>${bar?'':'<th class="num">Опт, ₴</th><th class="num">Роздріб, ₴</th>'}</tr></thead>
+     `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Інгредієнт</th>${bar?'':'<th class="num">Обліково</th>'}<th class="num">Фактично</th>${bar?'':'<th class="num">Різниця</th><th class="num">Опт, ₴</th><th class="num">Роздріб, ₴</th>'}</tr></thead>
       <tbody>${rowsHtml}</tbody></table></div>`,
      `${bar?'':`<button class="btn danger" onclick="unsignInventory('${id}')">Зняти підпис і редагувати</button>`}
       <div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Закрити</button>`);
