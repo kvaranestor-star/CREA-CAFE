@@ -1516,7 +1516,7 @@ function ingCategories(){
   return [...set].sort((a,b)=>a.localeCompare(b,'uk'));
 }
 function editIng(id){
-  const g = id? ing(id) : {name:'',unit:'g',stock:0,cost:0,min_stock:0,category:'',emoji:''};
+  const g = id? ing(id) : {name:'',unit:'g',stock:0,cost:0,retail_price:0,min_stock:0,category:'',emoji:''};
   const uOpts=Object.entries(UNITS).map(([k,v])=>`<option value="${k}" ${g.unit===k?'selected':''}>${v}</option>`).join('');
   const curCat=(g.category||'').trim();
   const cats=ingCategories(); if(curCat && !cats.includes(curCat)) cats.push(curCat);
@@ -1536,8 +1536,9 @@ function editIng(id){
         </div>
       </label></div>
     <div class="row"><label class="fld"><span>Залишок</span><input id="g-stock" class="inp" type="number" step="0.001" value="${g.stock||0}"></label>
-      <label class="fld"><span>Собівартість за 1, ₴</span><input id="g-cost" class="inp" type="number" step="0.01" value="${g.cost||0}"></label>
-      <label class="fld"><span>Мін. залишок</span><input id="g-min" class="inp" type="number" step="0.001" value="${g.min_stock||0}"></label></div>`,
+      <label class="fld"><span>Собівартість (оптова) за 1, ₴</span><input id="g-cost" class="inp" type="number" step="0.01" value="${g.cost||0}"></label>
+      <label class="fld"><span>Мін. залишок</span><input id="g-min" class="inp" type="number" step="0.001" value="${g.min_stock||0}"></label></div>
+    <div class="row"><label class="fld"><span>Роздрібна ціна за 1, ₴ <span class="muted">(якщо продається окремо, для інвентаризації)</span></span><input id="g-retail" class="inp" type="number" step="0.01" value="${g.retail_price||0}"></label></div>`,
    `${id?`<button class="btn danger" onclick="deleteIngredientSafe('${id}')">Видалити</button>`:''}
     <div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Відміна</button>
     <button class="btn" onclick="saveIng('${id||''}')">Зберегти</button>`);
@@ -1592,7 +1593,8 @@ async function deleteIngCategoryInline(){
 async function saveIng(id){
   const d={name:$('#g-name').value.trim(),emoji:$('#g-emoji').value.trim(),unit:$('#g-unit').value,
     category:$('#g-cat').value.trim(),stock:round2(num($('#g-stock').value)),
-    cost:round2(num($('#g-cost').value)),min_stock:round2(num($('#g-min').value)),is_active:true};
+    cost:round2(num($('#g-cost').value)),retail_price:round2(num($('#g-retail').value)),
+    min_stock:round2(num($('#g-min').value)),is_active:true};
   if(!d.name){toast('Назва порожня','err');return;}
   try{
     if(id){const r=await SB.patch(`ingredients?id=eq.${id}`,d);if(sbErr(r))throw r;}
@@ -2152,31 +2154,61 @@ async function submitWriteoffRequest(){
 }
 
 /* ============================ PAGE: ІНВЕНТАРИЗАЦІЯ (власник) ============================ */
+let _invMode = 'list';       // 'list' | 'form'
+let _invPrefill = null;      // {count_date, note, items:[{ingredient_id, actual_qty}]} — при редагуванні після зняття підпису
 PAGES.inventory = function(){
+  if(_invMode==='form') renderInventoryForm(); else renderInventoryList();
+};
+function renderInventoryList(){
+  $('#view').innerHTML=`<div class="page-head"><h1>Інвентаризація</h1><div class="line"></div>
+    <button class="btn" onclick="startInventoryForm()">+ Створити інвентаризацію</button></div>
+   <div id="inv-hist"></div>`;
+  renderInventoryHistory();
+}
+function startInventoryForm(prefill){
+  _invMode='form'; _invPrefill=prefill||null;
+  PAGES.inventory();
+}
+function cancelInventoryForm(){
+  _invMode='list'; _invPrefill=null;
+  PAGES.inventory();
+}
+function renderInventoryForm(){
   const list=State.ingredients.slice().sort((a,b)=>(a.category||'').localeCompare(b.category||'','uk')||a.name.localeCompare(b.name,'uk'));
-  $('#view').innerHTML=`<div class="page-head"><h1>Інвентаризація</h1><div class="line"></div></div>
+  const pf=_invPrefill;
+  const pfMap={}; if(pf) (pf.items||[]).forEach(it=>{ pfMap[it.ingredient_id]=it.actual_qty; });
+  const dateVal = pf?pf.count_date:new Date().toISOString().slice(0,10);
+  $('#view').innerHTML=`<div class="page-head"><h1>${pf?'Редагування інвентаризації':'Нова інвентаризація'}</h1><div class="line"></div>
+    <button class="btn ghost" onclick="cancelInventoryForm()">← Назад до історії</button></div>
    <div class="card" style="margin-bottom:14px">
-     <div class="muted" style="font-size:13px">Впиши фактичну кількість лише для тих позицій, які перевірив — порожні поля не змінюються. Система порівняє з обліковим залишком і сама скоригує склад та собівартість.</div>
+     <div class="row">
+       <label class="fld"><span>Дата інвентаризації</span><input id="inv-date" class="inp" type="date" value="${dateVal}"></label>
+       <label class="fld" style="flex:2"><span>Коментар (необов'язково)</span><input id="inv-note" class="inp" value="${esc(pf?pf.note||'':'')}" placeholder="Напр.: інвентаризація в кінці зміни"></label>
+     </div>
+     <div class="muted" style="font-size:13px;margin-top:6px">Впиши фактичну кількість лише для тих позицій, які перевірив — порожні поля не змінюються. Система звірить з обліковим залишком і після підпису сама скоригує склад.</div>
    </div>
    <div class="card" style="margin-bottom:14px">
      <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Інгредієнт</th><th>Категорія</th><th class="num">Обліково</th><th class="num" style="width:140px">Фактично</th><th class="num">Різниця</th></tr></thead>
-     <tbody id="inv-rows">${list.length?list.map(g=>invRowHtml(g)).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">Інгредієнтів ще немає</td></tr>'}</tbody></table></div>
+     <tbody id="inv-rows">${list.length?list.map(g=>invRowHtml(g,pfMap[g.id])).join(''):'<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">Інгредієнтів ще немає</td></tr>'}</tbody></table></div>
    </div>
-   <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
-     <div id="inv-summary" class="muted">Розбіжностей поки немає</div>
-     <label class="fld" style="flex:1;min-width:200px;margin:0"><span>Коментар (необов'язково)</span><input id="inv-note" class="inp" placeholder="Напр.: місячна інвентаризація"></label>
-     <button class="btn" onclick="saveInventory()">Провести інвентаризацію</button>
-   </div>
-   <div id="inv-hist"></div>`;
-  renderInventoryHistory();
-};
-function invRowHtml(g){
-  return `<tr class="inv-row" data-id="${g.id}" data-cost="${g.cost}" data-unit="${esc(UNITS[g.unit]||'')}" data-expected="${num(g.stock)}">
+   <div class="card" style="margin-bottom:16px">
+     <div id="inv-summary" class="muted" style="margin-bottom:12px">Розбіжностей поки немає</div>
+     <div style="display:flex;justify-content:flex-end;gap:8px">
+       <button class="btn ghost" onclick="cancelInventoryForm()">Скасувати</button>
+       <button class="btn" onclick="signInventory()">Підписати інвентаризацію</button>
+     </div>
+   </div>`;
+  $$('.inv-row').forEach(tr=>{ const inp=tr.querySelector('.inv-actual'); if(inp.value.trim()!=='') recalcInvRow(inp); });
+  recalcInvSummary();
+}
+function invRowHtml(g,prefillVal){
+  const val = (prefillVal===undefined||prefillVal===null)?'':prefillVal;
+  return `<tr class="inv-row" data-id="${g.id}" data-cost="${g.cost}" data-retail="${g.retail_price||0}" data-unit="${esc(UNITS[g.unit]||'')}" data-expected="${num(g.stock)}">
     <td style="font-size:18px">${g.emoji?esc(g.emoji):'📦'}</td>
     <td><b>${esc(g.name)}</b></td>
     <td>${esc(g.category||'')}</td>
     <td class="num">${money(g.stock)} ${UNITS[g.unit]||''}</td>
-    <td class="num"><input class="inp inv-actual" type="number" step="0.001" placeholder="${money(g.stock)}" oninput="recalcInvRow(this)" style="text-align:right;max-width:120px"></td>
+    <td class="num"><input class="inp inv-actual" type="number" step="0.001" value="${val}" placeholder="${money(g.stock)}" oninput="recalcInvRow(this)" style="text-align:right;max-width:120px"></td>
     <td class="num inv-diff muted">—</td>
   </tr>`;
 }
@@ -2197,53 +2229,68 @@ function recalcInvRow(inp){
 }
 function recalcInvSummary(){
   const box=$('#inv-summary'); if(!box) return;
-  let cnt=0, costImpact=0;
+  let cnt=0, shortageCost=0, shortageRetail=0, surplusCost=0, surplusRetail=0;
   $$('.inv-row').forEach(tr=>{
     const inp=tr.querySelector('.inv-actual'); const val=inp.value.trim();
     if(val==='') return;
+    cnt++;
     const diff=round2(num(val)-num(tr.dataset.expected));
     if(diff===0) return;
-    cnt++; costImpact=round2(costImpact+diff*num(tr.dataset.cost));
+    const cost=num(tr.dataset.cost);
+    const retail=num(tr.dataset.retail)>0?num(tr.dataset.retail):cost;   // якщо роздрібної немає — рахуємо по оптовій
+    if(diff<0){ shortageCost+=(-diff)*cost; shortageRetail+=(-diff)*retail; }
+    else{ surplusCost+=diff*cost; surplusRetail+=diff*retail; }
   });
-  box.innerHTML = cnt? `Позицій з розбіжністю: <b>${cnt}</b> · Вплив на суму складу: <b style="color:${costImpact<0?'var(--danger)':'var(--ok)'}">${costImpact>0?'+':''}${money(costImpact)} ₴</b>` : 'Розбіжностей поки немає';
+  shortageCost=round2(shortageCost); shortageRetail=round2(shortageRetail);
+  surplusCost=round2(surplusCost); surplusRetail=round2(surplusRetail);
+  const parts=[`Порахованих позицій: <b>${cnt}</b>`];
+  if(shortageCost>0||shortageRetail>0) parts.push(`Нестача: <b style="color:var(--danger)">${money(shortageCost)} ₴ (опт) / ${money(shortageRetail)} ₴ (роздріб)</b>`);
+  if(surplusCost>0||surplusRetail>0) parts.push(`Надлишок: <b style="color:var(--ok)">${money(surplusCost)} ₴ (опт) / ${money(surplusRetail)} ₴ (роздріб)</b>`);
+  box.innerHTML = parts.join(' · ');
 }
-async function saveInventory(){
+async function signInventory(){
+  const countDate=$('#inv-date').value;
+  if(!countDate){ toast('Вкажи дату інвентаризації','err'); return; }
   const rows=[];
   $$('.inv-row').forEach(tr=>{
     const inp=tr.querySelector('.inv-actual'); const val=inp.value.trim();
     if(val==='') return;
     const expected=num(tr.dataset.expected), actual=round2(num(val)), diff=round2(actual-expected);
-    if(diff===0) return;
-    rows.push({ingredient_id:tr.dataset.id, expected, actual, diff, cost:num(tr.dataset.cost)});
+    const cost=num(tr.dataset.cost), retail=num(tr.dataset.retail)>0?num(tr.dataset.retail):cost;
+    rows.push({ingredient_id:tr.dataset.id, expected, actual, diff, cost, retail});
   });
-  if(!rows.length){ toast('Немає розбіжностей для збереження — впиши фактичні кількості','err'); return; }
-  const totalCost=round2(rows.reduce((s,r)=>s+r.diff*r.cost,0));
-  if(!confirm(`Провести інвентаризацію: ${rows.length} позицій зі змінами, вплив на суму складу ${totalCost>0?'+':''}${money(totalCost)} ₴. Продовжити?`)) return;
+  if(!rows.length){ toast('Впиши хоча б одну фактичну кількість','err'); return; }
+  const diffCost=round2(rows.reduce((s,r)=>s+r.diff*r.cost,0));
+  const diffRetail=round2(rows.reduce((s,r)=>s+r.diff*r.retail,0));
+  if(!confirm(`Підписати інвентаризацію на ${new Date(countDate).toLocaleDateString('uk-UA')}: ${rows.length} порахованих позицій, вплив на суму складу ${diffCost>0?'+':''}${money(diffCost)} ₴ (опт) / ${diffRetail>0?'+':''}${money(diffRetail)} ₴ (роздріб). Після підпису склад буде скориговано. Продовжити?`)) return;
   try{
     const cRes=await SB.post('inventory_counts', withBranch({
-      note:$('#inv-note').value.trim(), items_count:rows.length, diff_cost:totalCost, created_by:State.user.id,
+      count_date:countDate, note:$('#inv-note').value.trim(), items_count:rows.length,
+      diff_cost:diffCost, diff_retail:diffRetail, created_by:State.user.id,
     }));
     if(sbErr(cRes)) throw cRes;
     const cnt=Array.isArray(cRes)?cRes[0]:cRes;
-    const items=rows.map(r=>({count_id:cnt.id, ingredient_id:r.ingredient_id, expected_qty:r.expected, actual_qty:r.actual, diff_qty:r.diff, cost:r.cost, diff_cost:round2(r.diff*r.cost)}));
+    const items=rows.map(r=>({count_id:cnt.id, ingredient_id:r.ingredient_id, expected_qty:r.expected, actual_qty:r.actual,
+      diff_qty:r.diff, cost:r.cost, diff_cost:round2(r.diff*r.cost), retail_price:r.retail, diff_retail_cost:round2(r.diff*r.retail)}));
     const iRes=await SB.post('inventory_count_items', items); if(sbErr(iRes)) throw iRes;
     for(const r of rows){
+      if(r.diff===0) continue;
       const g=ing(r.ingredient_id); if(!g) continue;
       const up=await SB.patch(`ingredients?id=eq.${r.ingredient_id}`,{stock:r.actual}); if(sbErr(up)) throw up;
       g.stock=r.actual;
-      await SB.post('stock_moves', withBranch({ingredient_id:r.ingredient_id, delta:r.diff, reason:'inventory', ref_id:cnt.id}));
+      await SB.post('stock_moves', withBranch({ingredient_id:r.ingredient_id, delta:r.diff, reason:'inventory', ref_id:cnt.id, created_at:countDate}));
     }
-    toast('Інвентаризацію проведено ✓ Склад скориговано','ok');
-    PAGES.inventory();
+    toast('Інвентаризацію підписано ✓ Склад скориговано','ok');
+    cancelInventoryForm();
   }catch(e){ reportErr(e,'Інвентаризація'); }
 }
 async function renderInventoryHistory(){
   const box=$('#inv-hist'); if(!box) return;
-  const r=await SB.get(`inventory_counts?select=*&branch_id=eq.${State.branchId}&order=created_at.desc&limit=20`);
+  const r=await SB.get(`inventory_counts?select=*&branch_id=eq.${State.branchId}&order=count_date.desc,created_at.desc&limit=30`);
   const list=arr(r);
   box.innerHTML = `<div class="card"><h3 style="margin-top:0">Історія інвентаризацій</h3>
-    ${list.length?`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Хто</th><th>Коментар</th><th class="num">Позицій</th><th class="num">Вплив на суму</th><th></th></tr></thead>
-    <tbody>${list.map(c=>`<tr><td>${new Date(c.created_at).toLocaleString('uk-UA')}</td><td>${esc(reqBaristaName(c.created_by))}</td><td>${esc(c.note||'')}</td><td class="num">${c.items_count}</td><td class="num" style="color:${num(c.diff_cost)<0?'var(--danger)':'var(--ok)'}">${num(c.diff_cost)>0?'+':''}${money(c.diff_cost)} ₴</td><td class="num"><button class="btn sm ghost" onclick="viewInventoryDetails('${c.id}')">Деталі</button></td></tr>`).join('')}</tbody></table></div>`
+    ${list.length?`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Хто підписав</th><th>Коментар</th><th class="num">Позицій</th><th class="num">Опт</th><th class="num">Роздріб</th><th></th></tr></thead>
+    <tbody>${list.map(c=>`<tr><td>${new Date(c.count_date).toLocaleDateString('uk-UA')}</td><td>${esc(reqBaristaName(c.created_by))}</td><td>${esc(c.note||'')}</td><td class="num">${c.items_count}</td><td class="num" style="color:${num(c.diff_cost)<0?'var(--danger)':'var(--ok)'}">${num(c.diff_cost)>0?'+':''}${money(c.diff_cost)} ₴</td><td class="num" style="color:${num(c.diff_retail)<0?'var(--danger)':'var(--ok)'}">${num(c.diff_retail)>0?'+':''}${money(c.diff_retail)} ₴</td><td class="num"><button class="btn sm ghost" onclick="viewInventoryDetails('${c.id}')">Деталі</button></td></tr>`).join('')}</tbody></table></div>`
     :'<div class="muted">Інвентаризацій ще не проводили.</div>'}</div>`;
 }
 async function viewInventoryDetails(id){
@@ -2254,12 +2301,38 @@ async function viewInventoryDetails(id){
       const g=ing(it.ingredient_id);
       return `<tr><td>${esc(g?g.name:'—')}</td><td class="num">${money(it.expected_qty)}</td><td class="num">${money(it.actual_qty)}</td>
         <td class="num" style="color:${num(it.diff_qty)<0?'var(--danger)':'var(--ok)'};font-weight:700">${num(it.diff_qty)>0?'+':''}${money(it.diff_qty)} ${g?UNITS[g.unit]:''}</td>
-        <td class="num">${num(it.diff_cost)>0?'+':''}${money(it.diff_cost)} ₴</td></tr>`;
-    }).join('') : '<tr><td colspan="5" class="muted" style="text-align:center;padding:20px">Немає даних</td></tr>';
+        <td class="num">${num(it.diff_cost)>0?'+':''}${money(it.diff_cost)} ₴</td>
+        <td class="num">${num(it.diff_retail_cost)>0?'+':''}${money(it.diff_retail_cost)} ₴</td></tr>`;
+    }).join('') : '<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">Немає даних</td></tr>';
     modal('Деталі інвентаризації',
-     `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Інгредієнт</th><th class="num">Обліково</th><th class="num">Фактично</th><th class="num">Різниця</th><th class="num">Вплив, ₴</th></tr></thead>
+     `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Інгредієнт</th><th class="num">Обліково</th><th class="num">Фактично</th><th class="num">Різниця</th><th class="num">Опт, ₴</th><th class="num">Роздріб, ₴</th></tr></thead>
       <tbody>${rowsHtml}</tbody></table></div>`,
-     `<div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Закрити</button>`);
+     `<button class="btn danger" onclick="unsignInventory('${id}')">Зняти підпис і редагувати</button>
+      <div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Закрити</button>`);
+  }catch(e){ reportErr(e,'Інвентаризація'); }
+}
+async function unsignInventory(id){
+  if(!confirm('Зняти підпис? Коригування складу, зроблені цією інвентаризацією, буде скасовано, а сама вона відкриється для редагування.')) return;
+  try{
+    const cRes=await SB.get(`inventory_counts?select=*&id=eq.${id}&limit=1`); if(sbErr(cRes)) throw cRes;
+    const cnt=arr(cRes)[0]; if(!cnt){ toast('Запис не знайдено','err'); return; }
+    const iRes=await SB.get(`inventory_count_items?select=*&count_id=eq.${id}`); if(sbErr(iRes)) throw iRes;
+    const items=arr(iRes);
+    for(const it of items){
+      if(num(it.diff_qty)===0) continue;
+      const g=ing(it.ingredient_id); if(!g) continue;
+      const restored=round2(num(g.stock)-num(it.diff_qty));
+      const up=await SB.patch(`ingredients?id=eq.${it.ingredient_id}`,{stock:restored}); if(sbErr(up)) throw up;
+      g.stock=restored;
+    }
+    const delMoves=await SB.del(`stock_moves?ref_id=eq.${id}&reason=eq.inventory`); if(sbErr(delMoves)) throw delMoves;
+    const delCnt=await SB.del(`inventory_counts?id=eq.${id}`); if(sbErr(delCnt)) throw delCnt;  // items каскадно видаляться
+    closeModal();
+    toast('Підпис знято — склад повернуто, можна відредагувати й підписати заново','ok');
+    startInventoryForm({
+      count_date: cnt.count_date, note: cnt.note,
+      items: items.map(it=>({ingredient_id:it.ingredient_id, actual_qty:it.actual_qty})),
+    });
   }catch(e){ reportErr(e,'Інвентаризація'); }
 }
 
